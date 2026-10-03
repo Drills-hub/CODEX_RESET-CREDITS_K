@@ -20,6 +20,7 @@ test('real stdio handshake queries credits without returning account identity', 
   const s = await service.read();
   assert.equal(s.availableCount, 1);
   assert.equal(s.credits[0].expiresAt, 1784246400);
+  assert.match(s.accountScope, /^[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(s), /SECRET/);
   assert.equal((await service.status()).authState, 'chatgpt');
 });

@@ -1,10 +1,13 @@
 import { formatKst, remainingTime, emptyMessage } from './time.mjs';
 import { initialState, updateState } from './state.mjs';
+import { createReminderController } from './notifications.mjs';
 
-const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status'].map(id => [id, document.getElementById(id)]));
 let state = initialState();
 let renderedSnapshot;
 let sessionReady = false;
+let reminders;
+let activeRefresh;
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 
 function node(tag, value, className) {
@@ -13,7 +16,19 @@ function node(tag, value, className) {
   if (className) element.className = className;
   return element;
 }
-function dispatch(event) { state = updateState(state, event); render(); }
+function dispatch(event) {
+  const previousSnapshot = state.snapshot;
+  state = updateState(state, event);
+  if (reminders) {
+    if (event.type === 'success' && state.snapshot === event.snapshot) reminders.update(event.snapshot);
+    else if (event.type === 'failure') {
+      if (state.snapshot) reminders.pause();
+      else reminders.cancel();
+    }
+    else if (event.type === 'status' && previousSnapshot && !state.snapshot) reminders.update(undefined);
+  }
+  render();
+}
 function render() {
   const ready = state.connected && state.authState === 'chatgpt';
   elements.connection.textContent = ready ? 'Codex 연결됨' : state.authState === 'signed-out' ? '로그인 필요' : state.authState === 'unsupported' ? '인증 방식 확인 필요' : state.connected ? '계정 확인 필요' : '연결 확인 필요';
@@ -23,6 +38,13 @@ function render() {
   document.body.dataset.loading = String(state.loading);
   elements.notice.textContent = state.message;
   elements.notice.dataset.kind = state.kind;
+  if (reminders) {
+    elements['notifications-toggle'].disabled = !sessionReady || !reminders.available;
+    elements['notifications-toggle'].textContent = reminders.enabled ? '알림 끄기' : '알림 켜기';
+    elements['notifications-status'].textContent = reminders.enabled
+      ? '알림이 켜졌습니다. 이 브라우저 탭이 열려 있을 때만 확인합니다.'
+      : reminders.reason || '브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.';
+  }
   elements.credits.setAttribute('aria-busy', String(state.loading));
   const snapshot = state.snapshot;
   if (renderedSnapshot !== snapshot) {
@@ -74,13 +96,28 @@ function failure(error) {
   return typeof error?.message === 'string' && typeof error?.code === 'string' ? error : { code: 'CONNECTION', message: '로컬 서버에 연결하지 못했습니다. 앱 실행 상태를 확인해 주세요.', clearPrevious: false };
 }
 async function refresh() {
-  if (state.loading || !sessionReady) return;
-  dispatch({ type: 'loading' });
-  try { dispatch({ type: 'success', snapshot: await api('/api/reset-credits/read', { method: 'POST' }) }); }
-  catch (error) {
-    dispatch({ type: 'failure', error: failure(error) });
-    await pollStatus();
-  }
+  if (!sessionReady) return null;
+  return refreshSnapshot();
+}
+async function refreshSnapshot() {
+  if (!sessionReady) return null;
+  if (activeRefresh) return activeRefresh;
+  const run = (async () => {
+    dispatch({ type: 'loading' });
+    try {
+      const snapshot = await api('/api/reset-credits/read', { method: 'POST' });
+      dispatch({ type: 'success', snapshot });
+      return snapshot;
+    }
+    catch (error) {
+      dispatch({ type: 'failure', error: failure(error) });
+      await pollStatus();
+      return null;
+    }
+  })();
+  const active = run.finally(() => { if (activeRefresh === active) activeRefresh = undefined; });
+  activeRefresh = active;
+  return active;
 }
 async function pollStatus() {
   if (!sessionReady || state.loading) return;
@@ -94,12 +131,26 @@ async function start() {
     if (token) await api('/api/session', { method: 'POST', data: { token } });
     else await api('/api/status');
     sessionReady = true;
+    reminders = createReminderController({
+      storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
+      locks: globalThis.navigator?.locks,
+      Notification: globalThis.Notification,
+      crypto: globalThis.crypto,
+      refresh: refreshSnapshot,
+    });
     await refresh();
+    reminders.restore();
+    render();
     setInterval(pollStatus, 5000);
   } catch {
     dispatch({ type: 'failure', error: { code: 'SESSION', message: '앱에서 열린 브라우저로 접속해 주세요. 터미널에서 앱을 종료한 뒤 npm start로 다시 실행할 수 있습니다.', clearPrevious: true } });
   }
 }
 elements.refresh.addEventListener('click', refresh);
+elements['notifications-toggle'].addEventListener('click', async () => {
+  if (reminders?.enabled) reminders.disable();
+  else if (reminders) await reminders.requestEnable();
+  render();
+});
 setInterval(tick, 1000);
 start();

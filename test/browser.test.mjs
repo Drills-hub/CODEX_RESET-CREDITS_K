@@ -179,3 +179,31 @@ test('focus alpha check rejects transparent CSS Color formats', async t => {
     assert.equal(keyboardFocusIsVisible({ focusVisible: true, outlineStyle: 'solid', outlineWidth: 3, outlineAlpha }), false);
   }
 });
+
+test('browser notification opt-in persists across reload in the same context', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  await context.addInitScript(() => {
+    class TestNotification {
+      static permission = 'granted';
+      static requestPermission = async () => 'granted';
+      constructor(title, options) {
+        globalThis.__resetCheckNotifications ??= [];
+        globalThis.__resetCheckNotifications.push({ title, options });
+      }
+    }
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: TestNotification });
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: async (_name, _options, callback) => callback() } });
+  });
+  const page = await openApp(t, { context });
+  const toggle = page.getByRole('button', { name: '알림 켜기' });
+  assert.equal(await toggle.isDisabled(), false);
+  await toggle.click();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#notifications-toggle').innerText(), '알림 끄기');
+  await page.getByRole('button', { name: '알림 끄기' }).waitFor();
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#count')?.textContent === '5');
+  await page.getByRole('button', { name: '알림 끄기' }).waitFor();
+});
