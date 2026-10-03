@@ -20,9 +20,23 @@ ChatGPT 데스크톱 앱·Codex CLI·IDE 확장은 같은 로컬 로그인 캐�
 인증 경로와 문제 해결은 [docs/authentication.md](docs/authentication.md)에 정리했습니다.
 현재 구현 범위와 다음 단계는 [docs/project-plan.md](docs/project-plan.md)에 정리했습니다.
 
-현재 구현은 `CODEX_CLI_PATH`를 지정하면 해당 실행 파일을 사용하고, 지정하지 않으면 PATH의 `codex`를 찾습니다. 둘 다 없을 때 macOS에서는 표준 시스템 앱 폴더와 사용자 앱 폴더에 설치된 ChatGPT 데스크톱 앱 번들의 Codex CLI를 자동 탐색합니다. Windows·Linux에서 CLI가 PATH에 없거나 다른 실행 파일을 사용하려면 `CODEX_CLI_PATH` 환경 변수로 경로를 지정할 수 있습니다. 데스크톱 앱의 로그인 세션을 사용하더라도 App Server가 같은 `CODEX_HOME`과 OS 자격 증명 저장소를 바라보는 환경이어야 합니다. 외부 패키지가 없어 `npm install`은 필요하지 않습니다. 기본 브라우저가 자동으로 열리며, 터미널의 `Ctrl+C`로 종료합니다. 서버는 임의의 빈 포트를 선택해 `127.0.0.1`에만 바인딩합니다.
+CLI 탐색 우선순위는 `CODEX_CLI_PATH`, PATH 순입니다. 둘 다 없으면 macOS는 표준 시스템 앱 폴더와 사용자 앱 폴더의 ChatGPT 앱 번들을, Windows는 설치된 ChatGPT AppX 패키지의 `InstallLocation` 내부를, Linux는 `chatgpt` 패키지의 소유 파일 목록만 탐색합니다. Windows 검색은 `codex.exe`, `codex.cmd`, `codex.bat`; Linux 검색은 실행 가능한 `codex` 파일만 대상으로 합니다. Windows/Linux에서 패키지 탐색으로 발견한 후보만 `codex app-server --help`로 지원 여부를 확인합니다. 이 탐색 전체는 시작 시 공유 3초 deadline을 적용하며, timeout 후 정리 대기에는 최대 1초가 추가될 수 있습니다. Windows 정리가 이 대기 안에 끝나지 않으면 정리 프로세스는 독립적으로 계속 실행됩니다. 남은 탐색 명령은 실행하지 않고, 출력은 기록하지 않습니다. macOS 앱 번들 후보에는 이 도움말 검증을 적용하지 않습니다. 시작 탐색 중 `Ctrl+C` 또는 종료 신호를 받으면 탐색을 취소하고 자식 프로세스를 정리합니다. 네이티브 Windows/Linux 호스트에서의 실행 검증은 아직 완료되지 않았습니다. 데스크톱 앱의 로그인 세션을 사용하더라도 App Server가 같은 `CODEX_HOME`과 OS 자격 증명 저장소를 바라보는 환경이어야 합니다. 일반 실행에는 외부 런타임 패키지가 필요하지 않습니다. 기본 브라우저가 자동으로 열리며, 터미널의 `Ctrl+C`로 종료합니다. 서버는 임의의 빈 포트를 선택해 `127.0.0.1`에만 바인딩합니다.
 
 첫 접속은 앱이 자동으로 연 브라우저에서 해 주세요. 일회용 접속 토큰을 세션 쿠키로 교환한 뒤 주소에서 제거합니다. 토큰은 터미널에 출력하지 않습니다. 같은 브라우저에서 새로고침은 가능하지만, 다른 브라우저·시크릿 창으로 접속하거나 쿠키를 삭제했다면 앱을 재시작해야 합니다. 기본 브라우저 실행 도구는 macOS `open`, Linux `xdg-open`, Windows `rundll32`입니다. 실행 도구가 실패하면 기본 브라우저 설정을 확인해 주세요.
+
+## 브라우저 시각 QA
+
+Playwright는 개발 전용 의존성입니다. 개발 의존성을 설치하고 Chromium 브라우저를 준비한 뒤 아래 명령을 실행하세요. 테스트 서버는 합성 `createApplication` 서비스만 사용하므로 로그인 계정이나 upstream API에 접속하지 않습니다.
+
+```sh
+npm install
+npx playwright install chromium
+npm run test:browser
+```
+
+브라우저 검사는 320, 375, 640, 768, 1280px 화면 폭에서 가로 넘침, 조회 버튼·상세 내용의 화면 내 배치, 키보드 포커스 표시를 확인합니다. 긴 제목·시각과 부분 조회, 개수만 제공, 0개·정보 없음, 새로고침 실패, 로그인 필요 상태도 확인합니다. PNG 스크린샷은 `VISUAL_QA_OUTPUT_DIR`이 지정되면 해당 디렉터리에, 아니면 새 임시 디렉터리에 저장하고 실행 결과에 경로를 출력합니다.
+
+조회 후 `만료 알림 켜기`를 누르고 브라우저 권한을 허용하면, 열린 탭에서 만료 24시간 전과 1시간 전에 브라우저 알림을 보냅니다. 알림 직전에 리셋권을 한 번 다시 조회해 현재도 사용 가능하고 같은 만료 항목인지 확인합니다. 설정과 중복 발송 방지 기록은 같은 로컬 앱 주소의 브라우저 저장소에만 두며, 발송 기록에는 원본 리셋권 ID·계정 ID·제목 없이 항목 digest·단계·시각만 저장합니다. 계정 전환으로 이전 기록을 정리하기 위한 별도 값도 원본 계정 정보가 아닌 일방향 account-scope digest입니다. 탭이나 앱을 닫으면 알림을 예약하거나 OS 백그라운드에서 보내지 않습니다.
 
 ## 표시 규칙
 
@@ -194,4 +208,4 @@ Node 기본 테스트 러너로 시간 변환·미제공 데이터·부분 목�
 - [Codex 인증과 자격 증명 저장](https://learn.chatgpt.com/docs/auth)
 - [요금제·초대 보상 조건](https://learn.chatgpt.com/docs/pricing)
 
-인터페이스나 계정별 제공 필드는 바뀔 수 있습니다. 호환성 오류가 나면 Codex CLI 버전을 확인하세요. 앱이 CLI를 자동 업데이트하거나 내부 API로 우회하지는 않습니다.
+인터페이스나 계정별 제공 필드는 바뀔 수 있습니다. 앱은 별도 호환성 RPC나 네트워크 probe 없이 `account/read`와 `account/rateLimits/read`의 조회 응답 형식으로 호환성을 판정합니다. 현재 CLI의 버전별 스키마는 `codex app-server generate-json-schema --out <임시 디렉터리>`로 개발 중 검토할 수 있습니다. 호환성 오류가 나면 `codex --version`으로 CLI 버전을 확인하고, 설치에 사용한 방법으로 Codex CLI를 최신 버전으로 업데이트한 뒤 다시 실행하세요. ChatGPT 데스크톱 앱에 포함된 CLI를 쓰는 경우 앱을 업데이트하세요. 앱은 CLI를 자동 업데이트하거나 내부 API로 우회하지 않습니다.

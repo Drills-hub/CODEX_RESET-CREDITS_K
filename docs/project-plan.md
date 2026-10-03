@@ -30,12 +30,14 @@ Codex 계정의 리셋권 개수와 지급·만료 시각을 한국 시간으로
 | macOS ChatGPT 데스크톱 앱만 | 지원 | 표준 시스템 앱 폴더 또는 사용자 앱 폴더의 번들 CLI를 자동 탐색합니다. |
 | Codex CLI만 | 지원 | `codex login`으로 ChatGPT 로그인합니다. |
 | 데스크톱 앱 + CLI | 지원 | `CODEX_CLI_PATH` → PATH의 `codex` → macOS 앱 번들 순서로 선택합니다. |
-| Windows/Linux 데스크톱 앱만 | 조건부 | CLI를 PATH에 설치하거나 `CODEX_CLI_PATH`를 지정해야 합니다. |
+| Windows/Linux 데스크톱 앱만 | 구현됨, 네이티브 검증 대기 | PATH fallback 뒤 Windows ChatGPT AppX `InstallLocation` 또는 Linux `chatgpt` 패키지 파일 목록에서 CLI 후보를 제한적으로 찾고, 해당 후보에만 `app-server --help` 검증을 실행합니다. |
 | API 키 로그인 | 미지원 | 리셋권 조회는 ChatGPT 인증만 허용합니다. |
 
 데스크톱 앱과 CLI는 Codex의 로컬 인증 캐시를 공유합니다. 웹앱은 인증 파일이나 토큰을 직접 읽지 않고 `codex app-server`에 조회를 위임합니다.
 
-실행 파일은 사용자가 지정한 `CODEX_CLI_PATH`를 가장 먼저 사용하고, 없으면 PATH의 `codex`를 찾습니다. 둘 다 없을 때 macOS에서는 표준 시스템 앱 폴더와 사용자 앱 폴더의 ChatGPT 데스크톱 앱 번들에서 Codex CLI를 자동 탐색합니다. 그 밖의 설치 위치는 `CODEX_CLI_PATH`로 지정할 수 있습니다.
+실행 파일은 `CODEX_CLI_PATH` → PATH → 플랫폼별 앱 패키지 탐색 순으로 선택합니다. macOS는 기존 ChatGPT 앱 번들 경로를, Windows는 설치된 ChatGPT AppX 패키지의 `InstallLocation` 내부에서 `codex.exe`/`.cmd`/`.bat`를, Linux는 `dpkg-query`/`rpm`/`pacman`으로 `chatgpt` 패키지 소유 파일 목록 중 실행 파일 `codex`를 탐색합니다. Windows/Linux에서 패키지 탐색으로 발견한 후보에만 `codex app-server --help` 지원 검증을 실행하며, macOS 번들 후보는 검증하지 않습니다. 탐색은 시작 때만 하며 조회부터 후보 검증까지 공유 3초 deadline과 후보 개수 제한을 적용합니다. timeout 뒤 caller의 정리 대기는 최대 1초이며, Windows `taskkill`이 이 제한보다 오래 걸리면 wrapper를 먼저 종료하지 않고 taskkill이 독립적으로 정리를 마치도록 둡니다. Windows native와 WSL은 별도 실행 환경으로 취급하며, Windows AppX 탐색은 Windows에서만 수행합니다. 시작 도중 종료 신호를 받으면 남은 탐색을 취소합니다. 그 밖의 설치 위치는 `CODEX_CLI_PATH`로 지정할 수 있습니다.
+
+**검증 상태:** 패키지 조회와 후보 선택은 모의 명령 실행기를 이용한 자동 테스트로 확인합니다. 현재 개발 호스트는 macOS이며 native Windows/Linux 패키지 실행은 아직 검증하지 않았습니다. 해당 교차 플랫폼 실행은 native Windows와 Linux 호스트에서 확인되기 전까지 미검증으로 표시합니다.
 
 ## 5. 기능 범위
 
@@ -51,7 +53,7 @@ Codex 계정의 리셋권 개수와 지급·만료 시각을 한국 시간으로
 ### 제외
 
 - 리셋권 사용 또는 소비
-- 만료 알림·이메일 발송
+- 앱이 종료된 뒤의 OS 백그라운드 만료 알림·이메일 발송
 - 다중 계정 관리
 - 공개 웹서비스 배포
 - API 키 기반 조회
@@ -83,14 +85,18 @@ Codex 계정의 리셋권 개수와 지급·만료 시각을 한국 시간으로
 
 - `npm test`로 인증·오류·계정 전환·HTTP 보안·시간 변환·UI 상태 전이를 검증합니다.
 - `npm run check`로 서버·클라이언트 모듈의 구문을 검증합니다.
+- CLI/App Server 계약 변경은 `codex app-server generate-json-schema --out <임시 디렉터리>`로 해당 CLI 버전의 스키마를 개발 중 비교합니다. 앱 시작 시 스키마 생성이나 별도 호환성 요청은 하지 않습니다.
+- `npm run test:browser`로 합성 서비스 기반 headless Chromium QA를 실행합니다. 320/375/640/768/1280px에서 넘침·컨트롤 배치·키보드 포커스와 긴 텍스트, 부분/개수만/0개/정보 없음, 새로고침 오류, 로그인 필요 상태를 확인하고 PNG를 저장합니다. `VISUAL_QA_OUTPUT_DIR`로 저장 위치를 지정할 수 있습니다. Playwright는 개발 전용이며 `server.mjs`에서 불러오지 않습니다. Playwright 또는 Chromium을 실행할 수 없으면 테스트가 skip 결과와 함께 종료 코드 1로 실패하므로, `npm install`과 Chromium 설치가 필요합니다.
 - 자동 테스트는 합성 응답과 임시 프로세스를 사용하므로 실제 계정이나 특정 사용자 경로에 의존하지 않습니다.
 - 실제 ChatGPT 계정 조회는 로그인된 Codex CLI와 계정별 필드 제공 여부가 필요하므로 사용자 환경에서 별도로 확인합니다.
 
 ## 9. 다음 단계
 
-1. Windows/Linux의 데스크톱 앱 번들 CLI 경로를 공식 설치 구조에 맞춰 추가 탐색
-2. 브라우저 기반 시각 QA와 좁은 화면 레이아웃 확인
-3. CLI/App Server 인터페이스 변경 감지 및 호환성 안내 보강
-4. 사용자가 원할 경우 만료 알림 기능을 별도 범위로 설계
+1. native Windows/Linux 호스트에서 패키지 탐색 및 App Server 후보 검증 확인
+2. 브라우저 기반 시각 QA와 좁은 화면 레이아웃 확인 — 완료. Chromium 브라우저 테스트 결과와 스크린샷은 `npm run test:browser`로 재현합니다.
+3. CLI/App Server 인터페이스 변경 감지 및 호환성 안내 보강 — 완료. `account/read`와 `account/rateLimits/read`의 기존 응답 형식만으로 감지하며 별도 RPC·네트워크 probe·시작 시 스키마 생성을 하지 않습니다.
+4. 선택적 만료 알림 — 완료. 브라우저 권한과 사용자 opt-in 뒤 열린 탭에서 24시간 전·1시간 전에 알리고, 알림 직전 한 번 재조회합니다. 설정과 중복 방지 digest만 같은 브라우저 저장소에 유지하고, 계정 전환 시 일방향 account-scope digest로 이전 기록을 지우며 OS 백그라운드 알림은 제공하지 않습니다.
+
+남은 작업은 native Windows/Linux 호스트 검증입니다.
 
 상세 실행 방법은 [README.md](../README.md), 인증 조건은 [authentication.md](authentication.md)를 참고합니다.
