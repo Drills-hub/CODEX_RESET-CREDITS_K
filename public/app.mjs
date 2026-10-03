@@ -2,13 +2,15 @@ import { formatKst, remainingTime, emptyMessage } from './time.mjs';
 import { initialState, updateState } from './state.mjs';
 import { createReminderController } from './notifications.mjs';
 import { recommendUsage } from './usage-timing.mjs';
+import { createUsageAlertController } from './usage-alerts.mjs';
 
-const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at', 'usage-alerts-toggle', 'usage-alerts-status'].map(id => [id, document.getElementById(id)]));
 const usageElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`usage-${kind}`) }));
 let state = initialState();
 let renderedSnapshot;
 let sessionReady = false;
 let reminders;
+let usageAlerts;
 let activeRefresh;
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 
@@ -29,6 +31,13 @@ function dispatch(event) {
     }
     else if (event.type === 'status' && previousSnapshot && !state.snapshot) reminders.update(undefined);
   }
+  if (usageAlerts) {
+    if (event.type === 'success' && state.snapshot === event.snapshot) usageAlerts.update(event.snapshot);
+    else if (event.type === 'failure' || event.type === 'status') {
+      if (!state.snapshot) usageAlerts.update(undefined);
+      else if (state.usageStale || !state.connected) usageAlerts.pause();
+    }
+  }
   render();
 }
 function render() {
@@ -46,6 +55,13 @@ function render() {
     elements['notifications-status'].textContent = reminders.enabled
       ? '알림이 켜졌습니다. 이 브라우저 탭이 열려 있을 때만 확인합니다.'
       : reminders.reason || '브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.';
+  }
+  if (usageAlerts) {
+    elements['usage-alerts-toggle'].disabled = !sessionReady || !usageAlerts.available;
+    elements['usage-alerts-toggle'].textContent = usageAlerts.enabled ? '사용량 알림 끄기' : '사용량 알림 켜기';
+    elements['usage-alerts-status'].textContent = usageAlerts.reason || (usageAlerts.enabled
+      ? '사용량 알림이 켜졌습니다. 열린 탭에서 발송 전 재조회합니다.'
+      : '리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.');
   }
   elements.credits.setAttribute('aria-busy', String(state.loading));
   const snapshot = state.snapshot;
@@ -160,7 +176,7 @@ async function refreshSnapshot() {
 async function pollStatus() {
   if (!sessionReady || state.loading) return;
   try { dispatch({ type: 'status', status: await api('/api/status') }); }
-  catch { state = { ...state, connected: false, usageStale: Boolean(state.snapshot) }; render(); }
+  catch { state = { ...state, connected: false, usageStale: Boolean(state.snapshot) }; usageAlerts?.pause(); render(); }
 }
 async function start() {
   const token = location.hash.slice(1);
@@ -176,8 +192,14 @@ async function start() {
       crypto: globalThis.crypto,
       refresh: refreshSnapshot,
     });
+    usageAlerts = createUsageAlertController({
+      storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
+      locks: globalThis.navigator?.locks, Notification: globalThis.Notification, crypto: globalThis.crypto,
+      refresh: refreshSnapshot, onError: () => render(),
+    });
     await refresh();
     reminders.restore();
+    usageAlerts.restore();
     render();
     setInterval(pollStatus, 5000);
   } catch {
@@ -190,11 +212,19 @@ elements['notifications-toggle'].addEventListener('click', async () => {
   else if (reminders) await reminders.requestEnable();
   render();
 });
+elements['usage-alerts-toggle'].addEventListener('click', async () => {
+  if (usageAlerts?.enabled) usageAlerts.disable();
+  else if (usageAlerts) await usageAlerts.requestEnable();
+  render();
+});
 addEventListener('storage', event => {
   if (event.key === null || event.key === 'reset-check.reminders.enabled.v1') {
     reminders?.restore();
     render();
   }
+  if (event.key === null || event.key === 'reset-check.usage-alerts.enabled.v1') { usageAlerts?.restore(); render(); }
 });
+addEventListener('pagehide', () => usageAlerts?.pause());
+addEventListener('pageshow', event => { if (event.persisted) void refresh(); });
 setInterval(tick, 1000);
 start();

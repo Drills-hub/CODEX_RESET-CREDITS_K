@@ -81,7 +81,7 @@ for (const width of widths) {
     const page = await openApp(t);
     await page.setViewportSize({ width, height: 950 });
     const geometry = await page.evaluate(() => {
-      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation'];
+      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation', '#usage-alerts'];
       const boxes = selectors.map(selector => {
         const element = document.querySelector(selector);
         const rect = element.getBoundingClientRect();
@@ -221,6 +221,51 @@ test('timing recommendation becomes requery guidance when a reset passes', async
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
 });
 
+test('usage alert opt-in validates low allowance, persists, and avoids reload duplicates', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => {
+    globalThis.__usageNotices = [];
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function (title, options) { __usageNotices.push({ title, ...options }); },
+      { permission: 'granted', requestPermission: async () => 'granted' }) });
+  });
+  let reads = 0;
+  const page = await openApp(t, { context, read: () => {
+    reads++; return { ...longSnapshot, accountScope: 'synthetic-digest', usageWindows: [longSnapshot.usageWindows[1]] };
+  } });
+  assert.equal(reads, 1);
+  await page.locator('#usage-alerts-toggle').click();
+  await page.waitForFunction(() => __usageNotices.length === 1);
+  assert.equal(reads, 2);
+  assert.match((await page.evaluate(() => __usageNotices[0])).body, /20%/);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#usage-alerts-toggle').textContent === '사용량 알림 끄기');
+  assert.equal(await page.evaluate(() => __usageNotices.length), 0);
+  await page.locator('#usage-alerts-toggle').click();
+  assert.equal(await page.locator('#usage-alerts-toggle').innerText(), '사용량 알림 켜기');
+});
+
+test('usage reset alert uses a real requery and never promises restored permission', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => {
+    globalThis.__usageNotices = [];
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function (title, options) { __usageNotices.push({ title, ...options }); },
+      { permission: 'granted', requestPermission: async () => 'granted' }) });
+  });
+  const at = Math.floor(Date.now() / 1000); let reads = 0;
+  const page = await openApp(t, { context, clockTime: at * 1000, read: () => ({ ...longSnapshot, accountScope: 'synthetic-digest', ordinaryUsageAllowed: false,
+    usageWindows: [{ ...longSnapshot.usageWindows[0], resetsAt: ++reads < 3 ? at + 60 : at + 18000 }],
+  }) });
+  await page.locator('#usage-alerts-toggle').click(); await page.clock.runFor(10);
+  await page.waitForFunction(() => __usageNotices.length === 1);
+  await page.clock.runFor(60000);
+  await page.waitForFunction(() => __usageNotices.some(row => /갱신이 확인/.test(row.body)));
+  const resetNotice = await page.evaluate(() => __usageNotices.find(row => /갱신이 확인/.test(row.body)));
+  assert.doesNotMatch(resetNotice.body, /사용 가능/);
+  assert.equal(reads, 3);
+});
+
 test('waits for delayed session exchange and the initial credit read', async t => {
   if (skipWithoutBrowser(t)) return;
   const page = await openApp(t, { sessionDelayMs: 500 });
@@ -294,15 +339,15 @@ test('browser notification opt-in persists across reload in the same context', a
     Object.defineProperty(globalThis, 'Notification', { configurable: true, value: TestNotification });
   });
   const page = await openApp(t, { context });
-  const toggle = page.getByRole('button', { name: '알림 켜기' });
+  const toggle = page.getByRole('button', { name: '알림 켜기', exact: true });
   assert.equal(await toggle.isDisabled(), false);
   await toggle.click();
   await page.waitForTimeout(100);
   assert.equal(await page.locator('#notifications-toggle').innerText(), '알림 끄기');
-  await page.getByRole('button', { name: '알림 끄기' }).waitFor();
+  await page.getByRole('button', { name: '알림 끄기', exact: true }).waitFor();
   await page.reload();
   await page.waitForFunction(() => document.querySelector('#count')?.textContent === '5');
-  await page.getByRole('button', { name: '알림 끄기' }).waitFor();
+  await page.getByRole('button', { name: '알림 끄기', exact: true }).waitFor();
 });
 
 test('real browser Web Locks serialize two tabs and a shared opt-out cancels delivery', async t => {
@@ -368,8 +413,8 @@ test('notification preference restores after the browser context closes with per
   t.after(() => firstContext.close());
   await installNotification(firstContext);
   const first = await openApp(t, { context: firstContext });
-  await first.getByRole('button', { name: '알림 켜기' }).click();
-  await first.getByRole('button', { name: '알림 끄기' }).waitFor();
+  await first.getByRole('button', { name: '알림 켜기', exact: true }).click();
+  await first.getByRole('button', { name: '알림 끄기', exact: true }).waitFor();
   const url = first.url();
   const saved = await firstContext.storageState();
   saved.cookies = saved.cookies.filter(cookie => cookie.expires > Date.now() / 1000);
@@ -380,6 +425,6 @@ test('notification preference restores after the browser context closes with per
   await installNotification(resumedContext);
   const resumed = await resumedContext.newPage();
   await resumed.goto(url);
-  await resumed.getByRole('button', { name: '알림 끄기' }).waitFor();
+  await resumed.getByRole('button', { name: '알림 끄기', exact: true }).waitFor();
   assert.equal(await resumed.locator('#count').innerText(), '5');
 });
