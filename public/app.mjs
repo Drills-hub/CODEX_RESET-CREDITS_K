@@ -4,12 +4,17 @@ import { createReminderController } from './notifications.mjs';
 import { recommendUsage } from './usage-timing.mjs';
 import { createUsageAlertController } from './usage-alerts.mjs';
 import { createUsageForecastController } from './usage-forecast.mjs';
+import { compareStartTimes } from './start-time-comparison.mjs';
 
 const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at', 'usage-alerts-toggle', 'usage-alerts-status'].map(id => [id, document.getElementById(id)]));
 const usageElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`usage-${kind}`) }));
 const forecastElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`forecast-${kind}`) }));
 const forecastToggle = document.getElementById('forecast-toggle');
 const forecastStatus = document.getElementById('forecast-status');
+const comparisonRoot = document.getElementById('start-time-comparison');
+const comparisonStatus = document.getElementById('comparison-status');
+const comparisonQueriedAt = document.getElementById('comparison-queried-at');
+const comparisonElements = ['now', 'five-hour', 'weekly'].map(key => ({ key, element: document.getElementById(`comparison-${key}`) }));
 let state = initialState();
 let renderedSnapshot;
 let sessionReady = false;
@@ -106,6 +111,7 @@ function tick() {
   renderUsage(snapshot);
   renderRecommendation(snapshot);
   renderForecast();
+  renderComparison();
   const nearest = snapshot?.credits.find(c => c.expiryState === 'known');
   elements['nearest-remaining'].textContent = nearest ? remainingTime(nearest.expiresAt) : '';
   for (const row of elements.credits.querySelectorAll('.remaining')) {
@@ -170,6 +176,29 @@ function renderForecast() {
     element.querySelector('.forecast-rate').textContent = Number.isFinite(row?.ratePerHour) ? `${row.ratePerHour.toFixed(1)}%p/시간` : '—';
     element.querySelector('.forecast-exhaustion').textContent = row?.exhaustsAt != null ? formatKst(row.exhaustsAt) : '—';
     element.querySelector('.forecast-samples').textContent = `최근 30분 성공 조회 ${row?.samples ?? 0}건`;
+  }
+}
+function renderComparison() {
+  const comparison = compareStartTimes(state.snapshot, { stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
+  const names = { 'five-hour': '5시간', weekly: '주간' };
+  comparisonRoot.dataset.state = comparison.state;
+  comparisonStatus.textContent = comparison.message;
+  comparisonQueriedAt.textContent = comparison.queriedAt === null ? '—' : formatKst(comparison.queriedAt);
+  for (const { key, element } of comparisonElements) {
+    const row = comparison.rows.find(row => row.key === key);
+    const suspended = ['not-ready', 'refresh-needed'].includes(row.state);
+    element.dataset.state = row.state;
+    element.querySelector('.comparison-time').textContent = row.startAt === null ? '—' : formatKst(row.startAt);
+    element.querySelector('.comparison-wait').textContent = row.startAt === null ? '' : key === 'now' ? '지금' : remainingTime(row.startAt);
+    element.querySelector('.comparison-resets').textContent = suspended ? '리셋 정보는 재조회 후 확인합니다.'
+      : key === 'now' ? '현재 조회된 한도 기준'
+      : row.startAt === null ? '리셋 시각 확인 불가'
+      : `이 시각까지 예정된 리셋 (이번 조회): ${row.resetKinds.map(kind => names[kind]).join(' · ') || '확인 불가'}`;
+    const limits = row.carriedLimits.map(limit => `${names[limit.kind]} ${limit.remainingPercent === null ? '확인 불가' : `${limit.remainingPercent}%`}`).join(' · ');
+    element.querySelector('.comparison-limits').textContent = suspended ? '한도 정보는 재조회 후 확인합니다.'
+      : limits ? `${key === 'now' ? '잔여량' : '아직 리셋 예정이 아닌 한도'} (마지막 조회 기준): ${limits}`
+      : '이 시각 이후에 예정된 리셋: 없음 (이번 조회 기준)';
+    element.querySelector('.comparison-message').textContent = row.message;
   }
 }
 async function api(path, { method = 'GET', data } = {}) {

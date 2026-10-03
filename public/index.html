@@ -45,6 +45,21 @@
       <p class="recommendation-meta">마지막 조회 <span id="recommendation-queried-at">—</span></p>
       <p class="recommendation-meta">잔여량을 활용하기 위한 권고이며, 작업 횟수나 사용 가능 시간을 보장하지 않습니다.</p>
     </section>
+    <section id="start-time-comparison" class="comparison" aria-labelledby="comparison-title">
+      <div class="section-title"><h2 id="comparison-title">작업 시작 시각 비교</h2><span>KST · UTC+09:00</span></div>
+      <p id="comparison-status" class="muted">조회 후 작업 시작 시각을 비교합니다.</p>
+      <table>
+        <caption>지금·5시간 리셋 후·주간 리셋 후의 확인 사항</caption>
+        <thead><tr><th scope="col">시작 시점</th><th scope="col">시각·대기 시간</th><th scope="col">조회된 한도와 확인 사항</th></tr></thead>
+        <tbody>
+          <tr id="comparison-now"><th scope="row">지금</th><td data-label="시각·대기 시간"><p class="comparison-time">—</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
+          <tr id="comparison-five-hour"><th scope="row">5시간 리셋 후</th><td data-label="시각·대기 시간"><p class="comparison-time">—</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
+          <tr id="comparison-weekly"><th scope="row">주간 리셋 후</th><td data-label="시각·대기 시간"><p class="comparison-time">—</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
+        </tbody>
+      </table>
+      <p class="comparison-meta muted">마지막 조회 <span id="comparison-queried-at">—</span></p>
+      <p class="comparison-meta muted">미래 잔여량이나 사용 권한을 확정하지 않습니다. 실제 작업 시작 전에 새로고침으로 확인하세요.</p>
+    </section>
     <section id="usage-alerts" class="notifications" aria-labelledby="usage-alerts-title">
       <div class="section-title"><h2 id="usage-alerts-title">사용량 알림</h2><button id="usage-alerts-toggle" type="button" disabled>사용량 알림 켜기</button></div>
       <p id="usage-alerts-status" class="muted">리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.</p>

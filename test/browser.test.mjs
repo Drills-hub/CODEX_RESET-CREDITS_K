@@ -81,7 +81,7 @@ for (const width of widths) {
     const page = await openApp(t);
     await page.setViewportSize({ width, height: 950 });
     const geometry = await page.evaluate(() => {
-      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation', '#usage-alerts', '#usage-forecast'];
+      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation', '#usage-alerts', '#usage-forecast', '#start-time-comparison'];
       const boxes = selectors.map(selector => {
         const element = document.querySelector(selector);
         const rect = element.getBoundingClientRect();
@@ -95,12 +95,14 @@ for (const width of widths) {
       return {
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: document.documentElement.clientWidth,
+        caption: (() => { const rect = document.querySelector('.comparison caption').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })(),
         boxes,
         clipped: boxes.filter(box => box.scrollWidth > box.clientWidth).map(box => box.selector),
         overlaps,
       };
     });
     assert.ok(geometry.documentWidth <= geometry.viewportWidth, `horizontal overflow: ${geometry.documentWidth}px > ${geometry.viewportWidth}px`);
+    assert.ok(geometry.caption.width >= 200 && geometry.caption.height < 80, 'comparison caption must use the table width rather than wrapping one character per line');
     for (const box of geometry.boxes) assert.ok(box.left >= 0 && box.right <= width, `${box.selector} must fit viewport`);
     assert.deepEqual(geometry.clipped, [], `content must not be clipped: ${geometry.clipped.join(', ')}`);
     assert.deepEqual(geometry.overlaps, [], `content boxes must not overlap: ${geometry.overlaps.join(', ')}`);
@@ -125,6 +127,7 @@ for (const width of widths) {
     assert.equal(focus.id, 'refresh');
     assert.equal(keyboardFocusIsVisible(focus), true, `keyboard focus must be visible: ${JSON.stringify(focus)}`);
     await page.screenshot({ path: join(outputDir, `long-partial-${width}.png`), fullPage: true });
+    await page.locator('#start-time-comparison').screenshot({ path: join(outputDir, `comparison-${width}.png`) });
   });
 }
 
@@ -326,6 +329,58 @@ test('forecast auto-retries after the first usage read fails despite ongoing emp
   await page.clock.runFor(300000);
   await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('1건'));
   assert.equal(reads, 2);
+});
+
+test('start-time comparison displays three options and the weekly bottleneck without future refill claims', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let reads = 0;
+  const page = await openApp(t, { read: () => { reads++; return { ...longSnapshot, ordinaryUsageAllowed: true, usageWindows: [
+    longSnapshot.usageWindows[0], { ...longSnapshot.usageWindows[1], remainingPercent: 0, usedPercent: 100 },
+  ] }; } });
+  assert.equal(await page.locator('#start-time-comparison tbody tr').count(), 3);
+  assert.equal(await page.locator('#comparison-now').getAttribute('data-state'), 'exhausted');
+  assert.equal(await page.locator('#comparison-five-hour').getAttribute('data-state'), 'remaining-limit');
+  assert.match(await page.locator('#comparison-five-hour .comparison-message').innerText(), /주간.*0%/);
+  assert.match(await page.locator('#comparison-five-hour .comparison-time').innerText(), /KST/);
+  assert.match(await page.locator('#comparison-weekly .comparison-resets').innerText(), /5시간.*주간/);
+  assert.doesNotMatch(await page.locator('#comparison-weekly').innerText(), /100%|사용 가능/);
+  assert.equal(reads, 1, 'comparison must not issue an additional usage read');
+  await page.setViewportSize({ width: 375, height: 950 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: join(outputDir, 'comparison-depleted-375.png'), fullPage: true });
+});
+
+test('comparison suspends after a failed refresh, recovers, and clears on logout', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let signedOut = false;
+  const page = await openApp(t, { authState: () => signedOut ? 'signed-out' : 'chatgpt', read: n => {
+    if (n === 2) throw new AppError('TIMEOUT');
+    if (n === 4) { signedOut = true; throw new AppError('LOGIN_REQUIRED'); }
+    return structuredClone(longSnapshot);
+  } });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'refresh-needed');
+  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '—');
+  assert.match(await page.locator('#comparison-queried-at').innerText(), /KST/);
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'complete');
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'not-ready');
+  assert.equal(await page.locator('#comparison-queried-at').innerText(), '—');
+  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '—');
+});
+
+test('comparison requires fresh reset times at the reset boundary instead of advancing by five hours', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let reads = 0;
+  const page = await openApp(t, { clockTime: at * 1000, read: () => { reads++; return { ...longSnapshot, queriedAt: at, usageWindows: [
+    { ...longSnapshot.usageWindows[0], resetsAt: at + 60 }, { ...longSnapshot.usageWindows[1], resetsAt: at + 86400 },
+  ] }; } });
+  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'complete');
+  await page.clock.runFor(61000);
+  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'refresh-needed');
+  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '—');
+  assert.equal(reads, 1);
 });
 
 test('waits for delayed session exchange and the initial credit read', async t => {

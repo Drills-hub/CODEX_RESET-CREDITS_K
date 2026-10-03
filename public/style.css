@@ -36,3 +36,16 @@ body[data-loading="true"] .recommendation{opacity:.6}
 .forecast-note{margin-top:20px;overflow-wrap:anywhere}
 body[data-loading="true"] .forecast .usage-grid{opacity:.6}
 @media(max-width:640px){.forecast-window+ .forecast-window{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}}
+.comparison{padding:24px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+#comparison-status{font-size:13px;margin:10px 0 18px}
+.comparison table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:13px;text-align:left}
+.comparison caption{text-align:left;color:var(--muted);font-size:12px;padding-bottom:12px}
+.comparison th,.comparison td{vertical-align:top;border-bottom:1px solid var(--border);padding:16px 10px}
+.comparison thead th{font-size:12px;color:var(--muted);font-weight:500;padding-top:0}
+.comparison thead th:nth-child(1){width:18%}.comparison thead th:nth-child(2){width:30%}
+.comparison tbody th{font-weight:600}.comparison tbody th:first-child{padding-left:0}
+.comparison-time,.comparison-wait{font-variant-numeric:tabular-nums}.comparison-wait,.comparison-limits{margin-top:7px}
+.comparison-message{margin-top:10px;line-height:1.7}.comparison-meta{font-size:12px;margin-top:12px}
+.comparison tr[data-state="exhausted"] .comparison-message,.comparison tr[data-state="remaining-limit"] .comparison-message,.comparison tr[data-state="server-restricted"] .comparison-message{color:#8c3d2d}
+body[data-loading="true"] .comparison table{opacity:.6}
+@media(max-width:640px){.comparison table,.comparison caption,.comparison tbody,.comparison tbody tr,.comparison tbody th,.comparison tbody td{display:block;width:auto}.comparison thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.comparison tbody tr{padding:18px 0;border-bottom:1px solid var(--border)}.comparison tbody th,.comparison tbody td{border:0;padding:0}.comparison tbody th{font-size:15px;margin-bottom:16px}.comparison tbody td+td{margin-top:16px}.comparison td::before{content:attr(data-label);display:block;color:var(--muted);font-size:12px;margin-bottom:7px}}
