@@ -25,3 +25,14 @@ body[data-loading="true"] .usage{opacity:.6}
 .recommendation-meta{font-size:12px;color:var(--muted);margin-top:10px}
 .recommendation[data-code="weekly-budget"] h3,.recommendation[data-code="exhausted"] h3,.recommendation[data-code="server-restricted"] h3{color:#8c3d2d}
 body[data-loading="true"] .recommendation{opacity:.6}
+.forecast{margin-top:24px;padding:18px 0 24px;border-bottom:1px solid var(--border)}
+.forecast .section-title button{padding:8px 14px;font-size:13px}
+#forecast-status{font-size:13px;margin:10px 0 20px;overflow-wrap:anywhere}
+.forecast-window{min-width:0;overflow-wrap:anywhere}.forecast-window+ .forecast-window{border-left:1px solid var(--border);padding-left:32px}
+.forecast-window h3{font-size:15px;font-weight:600;margin:0 0 12px}
+.forecast-state,.forecast-samples,.forecast-note{font-size:13px}
+.forecast-window dl{margin:16px 0;font-size:14px}.forecast-window dt{font-size:12px;color:var(--muted);margin-top:12px}
+.forecast-window dd{margin:5px 0 0;font-variant-numeric:tabular-nums}.forecast-rate{font-weight:600;color:var(--accent)}
+.forecast-note{margin-top:20px;overflow-wrap:anywhere}
+body[data-loading="true"] .forecast .usage-grid{opacity:.6}
+@media(max-width:640px){.forecast-window+ .forecast-window{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}}

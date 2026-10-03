@@ -81,7 +81,7 @@ for (const width of widths) {
     const page = await openApp(t);
     await page.setViewportSize({ width, height: 950 });
     const geometry = await page.evaluate(() => {
-      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation', '#usage-alerts'];
+      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation', '#usage-alerts', '#usage-forecast'];
       const boxes = selectors.map(selector => {
         const element = document.querySelector(selector);
         const rect = element.getBoundingClientRect();
@@ -264,6 +264,68 @@ test('usage reset alert uses a real requery and never promises restored permissi
   const resetNotice = await page.evaluate(() => __usageNotices.find(row => /갱신이 확인/.test(row.body)));
   assert.doesNotMatch(resetNotice.body, /사용 가능/);
   assert.equal(reads, 3);
+});
+
+test('forecast opt-in polls at five minutes, derives rates, and clears after opt-out or reload', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let reads = 0;
+  const page = await openApp(t, { clockTime: at * 1000, read: () => {
+    const n = reads++;
+    return { ...longSnapshot, queriedAt: at + n * 300, accountScope: 'forecast-account', usageWindows: [
+      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - n * 10, usedPercent: n * 10, resetsAt: at + 18000 },
+      { ...longSnapshot.usageWindows[1], remainingPercent: 50 - n, usedPercent: 50 + n, resetsAt: at + 604800 },
+    ] };
+  } });
+  assert.equal(reads, 1);
+  await page.locator('#forecast-toggle').click();
+  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /1건/);
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
+  assert.equal(reads, 2);
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
+  assert.equal(reads, 3);
+  assert.match(await page.locator('#forecast-five-hour .forecast-rate').innerText(), /120\.0%p/);
+  assert.match(await page.locator('#forecast-weekly .forecast-rate').innerText(), /12\.0%p/);
+  assert.match(await page.locator('#forecast-five-hour .forecast-exhaustion').innerText(), /KST/);
+  await page.locator('#forecast-toggle').click();
+  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '—');
+  await page.clock.runFor(300000); assert.equal(reads, 3);
+  await page.reload(); await page.waitForFunction(() => document.querySelector('#forecast-toggle')?.textContent === '추세 켜기');
+  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /0건/);
+});
+
+test('forecast hides stale extrapolation after failed polling and recovers on a successful read', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let reads = 0; let failed = false;
+  const page = await openApp(t, { clockTime: at * 1000, read: () => {
+    reads++;
+    if (failed) throw new AppError('TIMEOUT');
+    return { ...longSnapshot, queriedAt: at + (reads - 1) * 300, accountScope: 'forecast-account', usageWindows: [
+      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - (reads - 1) * 10, resetsAt: at + 18000 },
+    ] };
+  } });
+  await page.locator('#forecast-toggle').click();
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
+  failed = true; await page.clock.runFor(300000);
+  await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'stale');
+  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '—');
+  failed = false; await page.clock.runFor(300000);
+  await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
+});
+
+test('forecast auto-retries after the first usage read fails despite ongoing empty status polls', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let reads = 0;
+  const page = await openApp(t, { clockTime: at * 1000, read: () => {
+    if (++reads === 1) throw new AppError('TIMEOUT');
+    return { ...longSnapshot, queriedAt: at + 300, accountScope: 'forecast-account', usageWindows: [
+      { ...longSnapshot.usageWindows[0], resetsAt: at + 18000 },
+    ] };
+  } });
+  await page.locator('#forecast-toggle').click();
+  await page.clock.runFor(300000);
+  await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('1건'));
+  assert.equal(reads, 2);
 });
 
 test('waits for delayed session exchange and the initial credit read', async t => {

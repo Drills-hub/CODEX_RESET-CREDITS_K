@@ -3,14 +3,19 @@ import { initialState, updateState } from './state.mjs';
 import { createReminderController } from './notifications.mjs';
 import { recommendUsage } from './usage-timing.mjs';
 import { createUsageAlertController } from './usage-alerts.mjs';
+import { createUsageForecastController } from './usage-forecast.mjs';
 
 const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at', 'usage-alerts-toggle', 'usage-alerts-status'].map(id => [id, document.getElementById(id)]));
 const usageElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`usage-${kind}`) }));
+const forecastElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`forecast-${kind}`) }));
+const forecastToggle = document.getElementById('forecast-toggle');
+const forecastStatus = document.getElementById('forecast-status');
 let state = initialState();
 let renderedSnapshot;
 let sessionReady = false;
 let reminders;
 let usageAlerts;
+let forecast;
 let activeRefresh;
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 
@@ -36,6 +41,13 @@ function dispatch(event) {
     else if (event.type === 'failure' || event.type === 'status') {
       if (!state.snapshot) usageAlerts.update(undefined);
       else if (state.usageStale || !state.connected) usageAlerts.pause();
+    }
+  }
+  if (forecast) {
+    if (event.type === 'success' && state.snapshot === event.snapshot) forecast.update(event.snapshot);
+    else if (event.type === 'failure' || event.type === 'status') {
+      if (!state.snapshot) forecast.update(undefined);
+      else if (state.usageStale || !state.connected) forecast.pause();
     }
   }
   render();
@@ -93,6 +105,7 @@ function tick() {
   const snapshot = state.snapshot;
   renderUsage(snapshot);
   renderRecommendation(snapshot);
+  renderForecast();
   const nearest = snapshot?.credits.find(c => c.expiryState === 'known');
   elements['nearest-remaining'].textContent = nearest ? remainingTime(nearest.expiresAt) : '';
   for (const row of elements.credits.querySelectorAll('.remaining')) {
@@ -136,6 +149,29 @@ function renderRecommendation(snapshot) {
   elements['recommendation-remaining'].textContent = recommendation.targetAt === null ? '' : remainingTime(recommendation.targetAt);
   elements['recommendation-queried-at'].textContent = snapshot ? formatKst(snapshot.queriedAt) : '—';
 }
+function renderForecast() {
+  const enabled = forecast?.enabled ?? false;
+  forecastToggle.disabled = !sessionReady;
+  forecastToggle.textContent = enabled ? '추세 끄기' : '추세 켜기';
+  forecastStatus.textContent = enabled ? '화면이 보일 때 5분마다 조회합니다. 최근 30분의 성공 조회를 메모리에만 보관합니다.'
+    : '추세를 켜면 사용 속도와 예상 소진 시각을 계산합니다. 종료·새로고침 시 이력을 삭제합니다.';
+  const messages = {
+    unavailable: '사용 한도 정보를 확인할 수 없습니다.', collecting: '서로 다른 시각의 성공 조회가 3건 이상 필요합니다.',
+    'no-decrease': '잔여량 감소가 없어 소진 시점을 예측하지 않습니다.', exhausted: '마지막 조회 기준 잔여량이 0%입니다.',
+    'reset-first': '현재 추세로 리셋 전 소진 예상이 없습니다.', forecast: '최근 사용 속도가 유지될 때의 추정입니다.',
+    stale: '최신 조회 실패 — 다음 성공 조회까지 예측을 보류합니다.', 'reset-passed': '리셋 시각 경과 — 재조회가 필요합니다.',
+    'estimate-passed': '예상 소진 시각 경과 — 실제 상태를 재조회해 주세요.',
+  };
+  const rows = enabled ? forecast.read() : [];
+  for (const { kind, element } of forecastElements) {
+    const row = rows.find(row => row.kind === kind);
+    element.dataset.state = row?.state ?? 'off';
+    element.querySelector('.forecast-state').textContent = row ? messages[row.state] : '추세를 켜면 조회 이력을 수집합니다.';
+    element.querySelector('.forecast-rate').textContent = Number.isFinite(row?.ratePerHour) ? `${row.ratePerHour.toFixed(1)}%p/시간` : '—';
+    element.querySelector('.forecast-exhaustion').textContent = row?.exhaustsAt != null ? formatKst(row.exhaustsAt) : '—';
+    element.querySelector('.forecast-samples').textContent = `최근 30분 성공 조회 ${row?.samples ?? 0}건`;
+  }
+}
 async function api(path, { method = 'GET', data } = {}) {
   const response = await fetch(path, {
     method, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(17000),
@@ -176,7 +212,7 @@ async function refreshSnapshot() {
 async function pollStatus() {
   if (!sessionReady || state.loading) return;
   try { dispatch({ type: 'status', status: await api('/api/status') }); }
-  catch { state = { ...state, connected: false, usageStale: Boolean(state.snapshot) }; usageAlerts?.pause(); render(); }
+  catch { state = { ...state, connected: false, usageStale: Boolean(state.snapshot) }; usageAlerts?.pause(); forecast?.pause(); render(); }
 }
 async function start() {
   const token = location.hash.slice(1);
@@ -197,6 +233,7 @@ async function start() {
       locks: globalThis.navigator?.locks, Notification: globalThis.Notification, crypto: globalThis.crypto,
       refresh: refreshSnapshot, onError: () => render(),
     });
+    forecast = createUsageForecastController({ refresh: refreshSnapshot, onChange: renderForecast });
     await refresh();
     reminders.restore();
     usageAlerts.restore();
@@ -217,6 +254,8 @@ elements['usage-alerts-toggle'].addEventListener('click', async () => {
   else if (usageAlerts) await usageAlerts.requestEnable();
   render();
 });
+forecastToggle.addEventListener('click', () => { if (forecast?.enabled) forecast.disable(); else forecast?.enable(); });
+document.addEventListener('visibilitychange', () => forecast?.visibilityChanged());
 addEventListener('storage', event => {
   if (event.key === null || event.key === 'reset-check.reminders.enabled.v1') {
     reminders?.restore();
@@ -224,7 +263,7 @@ addEventListener('storage', event => {
   }
   if (event.key === null || event.key === 'reset-check.usage-alerts.enabled.v1') { usageAlerts?.restore(); render(); }
 });
-addEventListener('pagehide', () => usageAlerts?.pause());
+addEventListener('pagehide', () => { usageAlerts?.pause(); forecast?.disable(); });
 addEventListener('pageshow', event => { if (event.persisted) void refresh(); });
 setInterval(tick, 1000);
 start();
