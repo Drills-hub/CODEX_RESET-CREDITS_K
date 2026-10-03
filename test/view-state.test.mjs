@@ -38,3 +38,15 @@ test('out-of-order status responses cannot restore a previous account snapshot',
   assert.equal(stale.authState, 'signed-out');
   assert.equal(updateState(stale, { type: 'success', snapshot }).snapshot, null);
 });
+
+test('usage read failure stays stale through status polling and retries until a successful usage read', () => {
+  const loaded = updateState(initialState(), { type: 'success', snapshot });
+  assert.equal(loaded.usageStale, false);
+  const failed = updateState(loaded, { type: 'failure', error: { code: 'TIMEOUT', message: 'timeout', clearPrevious: false } });
+  assert.equal(failed.usageStale, true);
+  const polled = updateState(failed, { type: 'status', status: { revision: 1, authState: 'chatgpt', connected: true } });
+  assert.equal(polled.usageStale, true);
+  const retrying = updateState(polled, { type: 'loading' });
+  assert.equal(retrying.usageStale, true);
+  assert.equal(updateState(retrying, { type: 'success', snapshot }).usageStale, false);
+});

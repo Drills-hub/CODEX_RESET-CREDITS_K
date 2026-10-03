@@ -81,7 +81,7 @@ for (const width of widths) {
     const page = await openApp(t);
     await page.setViewportSize({ width, height: 950 });
     const geometry = await page.evaluate(() => {
-      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status'];
+      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation'];
       const boxes = selectors.map(selector => {
         const element = document.querySelector(selector);
         const rect = element.getBoundingClientRect();
@@ -158,6 +158,7 @@ test('missing usage and login changes clear the dashboard without inventing zero
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#connection').textContent === '로그인 필요');
   assert.equal(await page.locator('#usage-weekly .usage-percent').innerText(), '—');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'not-ready');
 });
 
 test('usage countdown crosses reset without locally replenishing the percentage', async t => {
@@ -186,6 +187,38 @@ test('server usage restriction remains visible after a reset or failed refresh',
   await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
   assert.match(await page.locator('#usage-status').innerText(), /서버.*일반 사용.*제한/);
   assert.match(await page.locator('#usage-status').innerText(), /이전 조회/);
+});
+
+test('timing recommendation shows its reason and query time and stays paused after failed refresh', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000);
+  const page = await openApp(t, { read: n => {
+    if (n === 2) throw new AppError('TIMEOUT');
+    return { ...longSnapshot, queriedAt: at, usageWindows: [
+      { ...longSnapshot.usageWindows[0], resetsAt: at + 3600 },
+      { ...longSnapshot.usageWindows[1], resetsAt: at + 86400 },
+    ] };
+  } });
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'weekly-reset');
+  assert.match(await page.locator('#recommendation-reason').innerText(), /20%/);
+  assert.match(await page.locator('#recommendation-queried-at').innerText(), /KST/);
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#recommendation')?.dataset.code === 'weekly-reset');
+});
+
+test('timing recommendation becomes requery guidance when a reset passes', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000);
+  const page = await openApp(t, { clockTime: at * 1000, read: () => ({ ...longSnapshot, queriedAt: at, usageWindows: [
+    { ...longSnapshot.usageWindows[0], resetsAt: at + 60 },
+    { ...longSnapshot.usageWindows[1], resetsAt: at + 172800 },
+  ] }) });
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'weekly-budget');
+  await page.clock.fastForward(61000);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
 });
 
 test('waits for delayed session exchange and the initial credit read', async t => {

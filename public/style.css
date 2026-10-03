@@ -18,3 +18,10 @@
 .usage-remaining{margin-top:6px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 body[data-loading="true"] .usage{opacity:.6}
 @media(max-width:640px){.usage-grid{grid-template-columns:1fr;gap:24px}.usage-window+ .usage-window{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}}
+.recommendation{padding:24px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+.recommendation h3{font-size:17px;color:var(--accent);margin:16px 0 10px;font-weight:600}
+#recommendation-reason{font-size:14px;line-height:1.7}
+#recommendation-target,#recommendation-remaining{font-size:13px;font-variant-numeric:tabular-nums}
+.recommendation-meta{font-size:12px;color:var(--muted);margin-top:10px}
+.recommendation[data-code="weekly-budget"] h3,.recommendation[data-code="exhausted"] h3,.recommendation[data-code="server-restricted"] h3{color:#8c3d2d}
+body[data-loading="true"] .recommendation{opacity:.6}

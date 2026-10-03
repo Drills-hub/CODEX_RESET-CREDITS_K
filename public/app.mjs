@@ -1,8 +1,9 @@
 import { formatKst, remainingTime, emptyMessage } from './time.mjs';
 import { initialState, updateState } from './state.mjs';
 import { createReminderController } from './notifications.mjs';
+import { recommendUsage } from './usage-timing.mjs';
 
-const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at'].map(id => [id, document.getElementById(id)]));
 const usageElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`usage-${kind}`) }));
 let state = initialState();
 let renderedSnapshot;
@@ -75,6 +76,7 @@ function render() {
 function tick() {
   const snapshot = state.snapshot;
   renderUsage(snapshot);
+  renderRecommendation(snapshot);
   const nearest = snapshot?.credits.find(c => c.expiryState === 'known');
   elements['nearest-remaining'].textContent = nearest ? remainingTime(nearest.expiresAt) : '';
   for (const row of elements.credits.querySelectorAll('.remaining')) {
@@ -103,11 +105,20 @@ function renderUsage(snapshot) {
       : hasReset ? remainingTime(row.resetsAt, now) : '리셋 시각 확인 불가';
   }
   elements['usage-status'].textContent = !snapshot ? '조회 후 사용 한도를 표시합니다.'
-    : state.kind === 'error' ? '이전 조회 결과입니다. 최신 사용량을 재조회해 주세요.'
+    : state.usageStale ? '이전 조회 결과입니다. 최신 사용량을 재조회해 주세요.'
     : resetPassed ? '리셋 시각이 지났습니다. 최신 사용량을 재조회해 주세요.'
     : snapshot.usageWindows?.every(row => row.state === 'complete') ? '마지막 조회 기준 잔여율입니다. 실제 사용 가능 여부는 서버 상태에 따라 달라집니다.'
     : '일부 사용 한도 정보를 확인할 수 없습니다. 제공된 값만 표시합니다.';
   if (snapshot?.ordinaryUsageAllowed === false) elements['usage-status'].textContent += ' 마지막 조회에서 서버가 일반 사용을 제한했습니다.';
+}
+function renderRecommendation(snapshot) {
+  const recommendation = recommendUsage(snapshot, { stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
+  elements.recommendation.dataset.code = recommendation.code;
+  elements['recommendation-title'].textContent = recommendation.title;
+  elements['recommendation-reason'].textContent = recommendation.reason;
+  elements['recommendation-target'].textContent = recommendation.targetAt === null ? '—' : formatKst(recommendation.targetAt);
+  elements['recommendation-remaining'].textContent = recommendation.targetAt === null ? '' : remainingTime(recommendation.targetAt);
+  elements['recommendation-queried-at'].textContent = snapshot ? formatKst(snapshot.queriedAt) : '—';
 }
 async function api(path, { method = 'GET', data } = {}) {
   const response = await fetch(path, {
@@ -149,7 +160,7 @@ async function refreshSnapshot() {
 async function pollStatus() {
   if (!sessionReady || state.loading) return;
   try { dispatch({ type: 'status', status: await api('/api/status') }); }
-  catch { state = { ...state, connected: false }; render(); }
+  catch { state = { ...state, connected: false, usageStale: Boolean(state.snapshot) }; render(); }
 }
 async function start() {
   const token = location.hash.slice(1);
