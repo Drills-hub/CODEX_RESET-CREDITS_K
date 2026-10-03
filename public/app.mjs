@@ -23,7 +23,7 @@ function dispatch(event) {
     if (event.type === 'success' && state.snapshot === event.snapshot) reminders.update(event.snapshot);
     else if (event.type === 'failure') {
       if (state.snapshot) reminders.pause();
-      else reminders.cancel();
+      else reminders.update(undefined);
     }
     else if (event.type === 'status' && previousSnapshot && !state.snapshot) reminders.update(undefined);
   }
@@ -151,6 +151,12 @@ elements['notifications-toggle'].addEventListener('click', async () => {
   if (reminders?.enabled) reminders.disable();
   else if (reminders) await reminders.requestEnable();
   render();
+});
+addEventListener('storage', event => {
+  if (event.key === null || event.key === 'reset-check.reminders.enabled.v1') {
+    reminders?.restore();
+    render();
+  }
 });
 setInterval(tick, 1000);
 start();

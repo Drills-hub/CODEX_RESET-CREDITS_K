@@ -23,6 +23,7 @@ test('bootstrap requires a single-use token and sets a private session cookie', 
   assert.equal(response.status, 200);
   assert.match(response.headers.get('set-cookie'), /HttpOnly/);
   assert.match(response.headers.get('set-cookie'), /SameSite=Strict/);
+  assert.match(response.headers.get('set-cookie'), /Max-Age=604800/);
   const again = await fetch(`${url}/api/session`, { method: 'POST', headers: { Origin: url, 'X-Reset-Check': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: app.bootstrapToken }) });
   assert.equal(again.status, 403);
 });
@@ -37,6 +38,17 @@ test('blocks unauthenticated and cross-origin API reads', async t => {
   const preflight = await fetch(`${url}/api/reset-credits/read`, { method: 'OPTIONS', headers: { Origin: 'https://evil.example' } });
   assert.equal(preflight.status, 403);
   assert.equal(preflight.headers.get('access-control-allow-origin'), null);
+});
+
+test('persisted browser session is renewed and cannot authenticate a different server run', async t => {
+  const { url, cookie, headers } = await setup(t);
+  const resumed = await fetch(`${url}/api/status`, { headers });
+  assert.equal(resumed.status, 200);
+  assert.match(resumed.headers.get('set-cookie'), /Max-Age=604800/);
+  const other = await setup(t);
+  const rejected = await fetch(`${other.url}/api/status`, { headers: { ...other.headers, Cookie: cookie } });
+  assert.equal(rejected.status, 403);
+  assert.equal(rejected.headers.get('set-cookie'), null);
 });
 test('rejects wrong Host, including DNS rebinding', async t => {
   const { url } = await setup(t);

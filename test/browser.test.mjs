@@ -194,7 +194,6 @@ test('browser notification opt-in persists across reload in the same context', a
       }
     }
     Object.defineProperty(globalThis, 'Notification', { configurable: true, value: TestNotification });
-    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: async (_name, _options, callback) => callback() } });
   });
   const page = await openApp(t, { context });
   const toggle = page.getByRole('button', { name: '알림 켜기' });
@@ -206,4 +205,83 @@ test('browser notification opt-in persists across reload in the same context', a
   await page.reload();
   await page.waitForFunction(() => document.querySelector('#count')?.textContent === '5');
   await page.getByRole('button', { name: '알림 끄기' }).waitFor();
+});
+
+test('real browser Web Locks serialize two tabs and a shared opt-out cancels delivery', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  let reads = 0;
+  const credit = { ...longSnapshot.credits[0], title: 'synthetic', reminderKey: 'test-stable-key', expiresAt: 100 * 3600 };
+  const value = { ...longSnapshot, credits: [credit], accountScope: 'synthetic-scope' };
+  const first = await openApp(t, { context, read: async () => {
+    reads++;
+    return structuredClone(value);
+  } });
+  const second = await context.newPage();
+  await second.goto(first.url());
+  await second.waitForFunction(() => document.querySelector('#count')?.textContent === '5');
+  const prepare = async page => page.evaluate(async value => {
+    const { createReminderController } = await import('/notifications.mjs');
+    globalThis.__at = 75 * 3600000;
+    globalThis.__notices = [];
+    globalThis.__timers = [];
+    const Notification = Object.assign(function (title, options) { __notices.push({ title, options }); }, { permission: 'granted' });
+    globalThis.__controller = createReminderController({
+      storage: localStorage, locks: navigator.locks, Notification,
+      now: () => __at,
+      setTimeout: (fn, delay) => { const timer = { fn, delay }; __timers.push(timer); return timer; },
+      clearTimeout: timer => { timer.cancelled = true; },
+      refresh: async () => {
+        const response = await fetch('/api/reset-credits/read', {
+          method: 'POST', headers: { 'X-Reset-Check': '1', 'Content-Type': 'application/json' }, body: '{}',
+        });
+        return response.ok ? response.json() : null;
+      },
+    });
+    __controller.update(value);
+    await __controller.requestEnable();
+  }, value);
+  await prepare(first); await prepare(second);
+  const before = reads;
+  await Promise.all([first, second].map(page => page.evaluate(async () => {
+    __at = 76 * 3600000;
+    await __timers.find(timer => !timer.cancelled).fn();
+  })));
+  assert.equal(reads - before, 1);
+  assert.equal(await first.evaluate(() => __notices.length) + await second.evaluate(() => __notices.length), 1);
+  await first.evaluate(() => __controller.disable());
+  await second.evaluate(async () => {
+    __at = 99 * 3600000;
+    await __timers.find(timer => !timer.cancelled).fn();
+  });
+  assert.equal(reads - before, 1);
+  assert.equal(await first.evaluate(() => __notices.length) + await second.evaluate(() => __notices.length), 1);
+});
+
+test('notification preference restores after the browser context closes with persistent cookies only', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const installNotification = async context => context.addInitScript(() => {
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function () {}, {
+      permission: 'granted', requestPermission: async () => 'granted',
+    }) });
+  });
+  const firstContext = await browser.newContext();
+  t.after(() => firstContext.close());
+  await installNotification(firstContext);
+  const first = await openApp(t, { context: firstContext });
+  await first.getByRole('button', { name: '알림 켜기' }).click();
+  await first.getByRole('button', { name: '알림 끄기' }).waitFor();
+  const url = first.url();
+  const saved = await firstContext.storageState();
+  saved.cookies = saved.cookies.filter(cookie => cookie.expires > Date.now() / 1000);
+  assert.equal(saved.cookies.length, 1, 'local authentication must survive browser shutdown');
+  await firstContext.close();
+  const resumedContext = await browser.newContext({ storageState: saved });
+  t.after(() => resumedContext.close());
+  await installNotification(resumedContext);
+  const resumed = await resumedContext.newPage();
+  await resumed.goto(url);
+  await resumed.getByRole('button', { name: '알림 끄기' }).waitFor();
+  assert.equal(await resumed.locator('#count').innerText(), '5');
 });

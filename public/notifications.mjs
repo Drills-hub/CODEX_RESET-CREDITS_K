@@ -12,6 +12,7 @@ export function createReminderController({ storage, locks, Notification, crypto 
   let timer;
   let timerGeneration = 0;
   let lifecycle = 0;
+  let snapshotVersion = 0;
 
   const available = Boolean(storage && locks?.request && crypto?.subtle && (Notification || notify));
   function report(error) { try { onError(error); } catch {} }
@@ -23,6 +24,15 @@ export function createReminderController({ storage, locks, Notification, crypto 
   function invalidate() {
     lifecycle++;
     cancelTimer();
+  }
+  function stillEnabled() {
+    if (!enabled) return false;
+    try {
+      if (storage.getItem(preferenceKey) === 'true') return true;
+    } catch (error) { report(error); }
+    enabled = false;
+    invalidate();
+    return false;
   }
   function readLedger() {
     let raw;
@@ -57,13 +67,13 @@ export function createReminderController({ storage, locks, Notification, crypto 
     catch (error) { report(error); return false; }
   }
   async function fingerprint(credit) {
-    const source = JSON.stringify([credit.title, credit.grantedAt, credit.expiresAt, credit.status, credit.expiryState]);
+    const source = JSON.stringify([credit.reminderKey, credit.grantedAt, credit.expiresAt]);
     if (crypto.digest) return crypto.digest(source);
     const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source));
     return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
   }
   function eligible(credit, at) {
-    return credit?.status === 'available' && credit.expiryState === 'known' && Number.isSafeInteger(credit.expiresAt) && credit.expiresAt * 1000 > at;
+    return typeof credit?.reminderKey === 'string' && credit.reminderKey.length > 0 && credit.status === 'available' && credit.expiryState === 'known' && Number.isSafeInteger(credit.expiresAt) && credit.expiresAt * 1000 > at;
   }
   async function candidates(at, expectedLifecycle) {
     const result = [];
@@ -89,40 +99,43 @@ export function createReminderController({ storage, locks, Notification, crypto 
     try {
       cancelTimer();
       const expectedLifecycle = lifecycle;
-      if (!enabled || !snapshot || Notification?.permission !== 'granted') return;
+      const scheduledGeneration = timerGeneration;
+      if (!stillEnabled() || !snapshot || Notification?.permission !== 'granted') return;
       const all = await candidates(now(), expectedLifecycle);
-      if (expectedLifecycle !== lifecycle || !enabled || Notification?.permission !== 'granted') return;
+      if (expectedLifecycle !== lifecycle || scheduledGeneration !== timerGeneration || !stillEnabled() || Notification?.permission !== 'granted') return;
       const nextDueAt = all.reduce((soonest, item) => Math.min(soonest, item.dueAt), Infinity);
       if (!Number.isFinite(nextDueAt)) return;
       const next = all.filter(item => item.dueAt === nextDueAt);
-      const scheduledGeneration = timerGeneration;
       const delay = Math.min(maxTimerDelay, Math.max(0, nextDueAt - now()));
       timer = schedule(() => {
-        if (enabled && expectedLifecycle === lifecycle && scheduledGeneration === timerGeneration) void deliver(next, expectedLifecycle);
+        if (stillEnabled() && expectedLifecycle === lifecycle && scheduledGeneration === timerGeneration) return deliver(next, expectedLifecycle);
       }, delay);
     } catch (error) { report(error); }
   }
   async function deliver(targets, expectedLifecycle) {
     cancelTimer();
-    if (!enabled || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
+    if (!stillEnabled() || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
     if (targets[0]?.dueAt > now()) {
       if (expectedLifecycle === lifecycle && enabled) await plan();
       return;
     }
     try {
       await locks.request(lockName, { mode: 'exclusive' }, async () => {
-        if (!enabled || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
+        if (!stillEnabled() || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
         const existing = readLedger();
         if (!existing || !enabled || expectedLifecycle !== lifecycle) return;
+        targets = targets.filter(target => !existing.some(row => row.fingerprint === target.fingerprint && row.milestone === target.milestone));
+        if (!targets.length) return;
         const before = snapshot;
         const fresh = await refresh?.(before);
-        if (!fresh || !enabled || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
-        if (revision !== before?.revision || fresh.revision !== before?.revision) return;
+        if (!fresh || !stillEnabled() || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
+        if (revision !== before?.revision || fresh.revision !== before?.revision || fresh.accountScope !== before?.accountScope) return;
+        const validatedVersion = snapshotVersion;
         const freshRows = [];
         for (const credit of fresh.credits ?? []) {
           if (!eligible(credit, now())) continue;
           freshRows.push({ credit, fingerprint: await fingerprint(credit) });
-          if (expectedLifecycle !== lifecycle) return;
+          if (expectedLifecycle !== lifecycle || validatedVersion !== snapshotVersion) return;
         }
         const due = [];
         for (const target of targets) {
@@ -134,13 +147,13 @@ export function createReminderController({ storage, locks, Notification, crypto 
           }
         }
         for (const item of due) {
-          if (!enabled || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
+          if (!stillEnabled() || expectedLifecycle !== lifecycle || validatedVersion !== snapshotVersion || Notification?.permission !== 'granted') return;
           const ledger = readLedger();
           if (!ledger || ledger.some(row => row.fingerprint === item.fingerprint && row.milestone === item.milestone)) continue;
           const previousLedger = ledger.slice();
           ledger.push({ fingerprint: item.fingerprint, milestone: item.milestone, sentAt: now() });
           if (!persistLedger(ledger)) return;
-          if (!enabled || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
+          if (!stillEnabled() || expectedLifecycle !== lifecycle || Notification?.permission !== 'granted') return;
           try { makeNotification(item); }
           catch (error) {
             persistLedger(previousLedger);
@@ -165,9 +178,10 @@ export function createReminderController({ storage, locks, Notification, crypto 
     },
     async requestEnable() {
       if (!available || Notification?.permission === 'denied') return false;
+      const expectedLifecycle = lifecycle;
       try {
         const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
-        if (permission !== 'granted' || !persistEnabled(true)) return false;
+        if (permission !== 'granted' || expectedLifecycle !== lifecycle || !persistEnabled(true)) return false;
         enabled = true;
         await plan();
         return true;
@@ -191,9 +205,11 @@ export function createReminderController({ storage, locks, Notification, crypto 
       catch (error) { report(error); return false; }
       enabled = stored === 'true' && Notification?.permission === 'granted';
       if (enabled) void plan();
+      else invalidate();
       return enabled;
     },
     update(value) {
+      snapshotVersion++;
       const changed = revision !== undefined && (!value || value.revision !== revision);
       const nextScope = typeof value?.accountScope === 'string' && value.accountScope ? value.accountScope : undefined;
       const previousScope = nextScope ? readScope() : undefined;

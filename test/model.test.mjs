@@ -58,3 +58,14 @@ test('invalid timestamps and unknown statuses fail safely', () => {
   assert.equal(s.credits[1].expiryState, 'unknown');
   assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: -1 } }, 0), error => error.code === 'INCOMPATIBLE');
 });
+
+test('stable reminder keys distinguish identical display rows without exposing raw IDs', () => {
+  const normalize = rows => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: rows.length, credits: rows } }).credits;
+  const row = { title: 'same', status: 'available', grantedAt: 1, expiresAt: 100 };
+  const rows = normalize([{ ...row, id: 'PRIVATE_FIRST' }, { ...row, id: 'PRIVATE_SECOND' }]);
+  assert.match(rows[0].reminderKey, /^[a-f0-9]{64}$/);
+  assert.notEqual(rows[0].reminderKey, rows[1].reminderKey);
+  assert.equal(normalize([{ ...row, id: 'PRIVATE_SECOND' }])[0].reminderKey, rows[1].reminderKey);
+  assert.equal(normalize([row])[0].reminderKey, undefined);
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_/);
+});

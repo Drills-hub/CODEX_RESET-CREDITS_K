@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createReminderController } from '../public/notifications.mjs';
 
 const hour = 3600000;
-const snapshot = (credits = [{ number: 1, title: 'PRIVATE_TITLE', status: 'available', expiryState: 'known', grantedAt: 1, expiresAt: 100 * 3600 }], revision = 1) => ({ credits, revision });
+const snapshot = (credits = [{ number: 1, title: 'PRIVATE_TITLE', status: 'available', expiryState: 'known', grantedAt: 1, expiresAt: 100 * 3600 }], revision = 1) => ({ credits: credits.map(row => ({ reminderKey: testDigest(JSON.stringify([row.title, row.grantedAt])), ...row })), revision });
 function testDigest(value) {
   let hash = 2166136261;
   for (const character of value) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
@@ -17,7 +17,11 @@ function harness({ now = 76 * hour, storage = new Map(), storageApi, lockState =
     setTimeout: (fn, delay) => { const timer = { fn, delay, cancelled: false }; scheduled.push(timer); return timer; },
     clearTimeout: timer => { timer.cancelled = true; },
     storage: storageApi ?? { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
-    locks: { request: async (name, options, fn) => { if (lockState.has(name)) return; lockState.set(name, true); try { return await fn(); } finally { lockState.delete(name); } } },
+    locks: { request: (name, options, fn) => {
+      const next = (lockState.get(name) ?? Promise.resolve()).then(fn);
+      lockState.set(name, next.catch(() => {}));
+      return next;
+    } },
     Notification: Object.assign(NotificationClass ?? function (title, options) { notices.push({ title, options }); }, { get permission() { return permission; } }),
     crypto: { subtle: {}, digest },
   };
@@ -234,4 +238,73 @@ test('long waits are split below the browser timer maximum', async () => {
   await timer.fn();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(reads, 0);
+});
+
+test('identical display fields with distinct stable keys produce two reminders', async () => {
+  const row = snapshot().credits[0];
+  const h = harness({ now: 75 * hour });
+  h.controller.update(snapshot([{ ...row, reminderKey: 'first' }, { ...row, number: 2, reminderKey: 'second' }]));
+  h.controller.enable();
+  await new Promise(resolve => setImmediate(resolve));
+  h.setNow(76 * hour);
+  await h.scheduled.find(timer => !timer.cancelled).fn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.notices.length, 2);
+});
+
+test('replacement with identical display fields does not validate the old item', async () => {
+  const row = snapshot().credits[0];
+  const h = harness({ now: 75 * hour, refresh: async () => snapshot([{ ...row, reminderKey: 'replacement' }]) });
+  h.controller.update(snapshot([{ ...row, reminderKey: 'original' }])); h.controller.enable();
+  await new Promise(resolve => setImmediate(resolve));
+  h.setNow(76 * hour);
+  await h.scheduled.find(timer => !timer.cancelled).fn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.notices.length, 0);
+});
+
+test('turning off in a second tab prevents delivery by an already scheduled tab', async () => {
+  const storage = new Map();
+  const first = harness({ now: 75 * hour, storage });
+  first.controller.update(snapshot()); first.controller.enable();
+  await new Promise(resolve => setImmediate(resolve));
+  const second = harness({ storage }); second.controller.restore(); second.controller.disable();
+  first.setNow(76 * hour);
+  await first.scheduled.find(timer => !timer.cancelled).fn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(first.notices.length, 0);
+});
+
+test('items without stable identifiers are displayed but never scheduled', async () => {
+  const h = harness({ now: 75 * hour });
+  h.controller.update({ ...snapshot(), credits: [{ ...snapshot().credits[0], reminderKey: undefined }] });
+  h.controller.enable();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.scheduled.length, 0);
+});
+
+test('an outdated asynchronous plan cannot recreate a cancelled timer', async () => {
+  let release;
+  const h = harness({ now: 75 * hour, digest: () => new Promise(resolve => { release = resolve; }) });
+  h.controller.update(snapshot()); h.controller.enable();
+  await new Promise(resolve => setImmediate(resolve));
+  h.controller.update(snapshot([], 1));
+  release('old-hash');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.scheduled.length, 0);
+});
+
+test('the 1h milestone refreshes once and denied permissions prevent opt-in', async () => {
+  let reads = 0;
+  const h = harness({ now: 98 * hour, refresh: async value => { reads++; return value; } });
+  h.controller.update(snapshot()); h.controller.enable();
+  await new Promise(resolve => setImmediate(resolve));
+  h.setNow(99 * hour);
+  await h.scheduled.find(timer => !timer.cancelled).fn();
+  assert.equal(reads, 1);
+  assert.equal(h.notices.length, 1);
+  assert.match(h.notices[0].options.body, /1시간/);
+  const denied = harness({ permission: 'denied' });
+  assert.equal(await denied.controller.requestEnable(), false);
+  assert.equal(denied.storage.size, 0);
 });
