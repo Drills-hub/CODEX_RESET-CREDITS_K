@@ -396,6 +396,8 @@ test('delayed refresh suspends usage decisions while retaining the last dashboar
   assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'refreshing');
   assert.doesNotMatch(await page.locator('#recommendation').innerText(), /지금 사용 가능합니다|활용을 권장|잔여량을 활용하기 위한 권고/);
   assert.match(await page.locator('#usage-status').innerText(), /재조회 중.*마지막 성공 결과/);
+  for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(release);
   release();
   await page.waitForFunction(() => document.body.dataset.loading === 'false');
   assert.notEqual(await page.locator('#recommendation').getAttribute('data-code'), 'refreshing');
@@ -419,6 +421,66 @@ test('initial markup stays neutral while the session exchange is pending', async
   const initial = await page.evaluate(() => __initialRecommendationDisclaimer);
   assert.doesNotMatch(initial, /잔여량을 활용하기 위한 권고/);
   assert.match(initial, /조회.*안내/);
+});
+
+for (const tabCount of [2, 3]) test(`${tabCount} visible tabs share simultaneous forecast reads without BUSY or stale results`, async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  const at = Math.floor(Date.now() / 1000); let reads = 0; let active = false; let block = false; let release;
+  const result = () => ({ ...longSnapshot, queriedAt: block ? at + 300 : at, accountScope: 'shared-scope' });
+  const first = await openApp(t, { context, clockTime: at * 1000, read: async () => {
+    if (active) throw new AppError('BUSY');
+    reads++; active = true;
+    try { if (block) await new Promise(resolve => { release = resolve; }); return result(); }
+    finally { active = false; }
+  } });
+  const pages = [first];
+  for (let index = 1; index < tabCount; index++) {
+    const page = await context.newPage(); pages.push(page); t.after(() => page.close());
+    await page.clock.install({ time: new Date(at * 1000) }); await page.goto(first.url());
+    await page.waitForFunction(() => document.querySelector('#notice').textContent === '조회가 완료되었습니다.');
+  }
+  await Promise.all(pages.map(page => page.locator('#forecast-toggle').click()));
+  const before = reads; block = true;
+  await Promise.all(pages.map(page => page.clock.runFor(300000)));
+  for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(release);
+  for (const page of pages) assert.equal(await page.locator('body').getAttribute('data-loading'), 'true');
+  release();
+  for (const page of pages) {
+    await page.waitForFunction(() => document.body.dataset.loading === 'false');
+    assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /2건/);
+    assert.notEqual(await page.locator('#forecast-five-hour').getAttribute('data-state'), 'stale');
+    assert.equal(await page.locator('#notice').getAttribute('data-kind'), 'info');
+  }
+  assert.equal(reads - before, 1);
+});
+
+test('manual refresh and another tab alert validation share one usage read', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => {
+    globalThis.__usageNotices = [];
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function (title, options) { __usageNotices.push({ title, ...options }); },
+      { permission: 'granted', requestPermission: async () => 'granted' }) });
+  });
+  let reads = 0; let block = false; let release;
+  const first = await openApp(t, { context, read: async () => {
+    reads++; if (block) await new Promise(resolve => { release = resolve; });
+    return { ...longSnapshot, accountScope: 'shared-scope', usageWindows: [{ ...longSnapshot.usageWindows[0], remainingPercent: 10, usedPercent: 90 }] };
+  } });
+  const second = await context.newPage(); t.after(() => second.close()); await second.goto(first.url());
+  await second.waitForFunction(() => document.querySelector('#notice').textContent === '조회가 완료되었습니다.');
+  // Keep the first client manual-only while the second validates a notification.
+  await first.evaluate(() => { Notification.permission = 'denied'; });
+  const before = reads; block = true;
+  await Promise.all([first.locator('#refresh').click(), second.locator('#usage-alerts-toggle').click()]);
+  await second.waitForFunction(() => document.body.dataset.loading === 'true');
+  for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(release); release();
+  await first.waitForFunction(() => document.body.dataset.loading === 'false');
+  await second.waitForFunction(() => __usageNotices.length === 1);
+  assert.equal(reads - before, 1);
 });
 
 test('empty, count-only, unavailable, refresh failure, and login-needed states render without overflow', async t => {

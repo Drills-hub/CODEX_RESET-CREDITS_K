@@ -1,6 +1,7 @@
 const preferenceKey = 'reset-check.usage-alerts.enabled.v1';
 const ledgerKey = 'reset-check.usage-alerts.sent.v1';
 const scopeKey = 'reset-check.usage-alerts.account-scope.v1';
+const retryKey = 'reset-check.usage-alerts.retry.v1';
 const lockName = 'reset-check.usage-alerts.delivery.v1';
 const minute = 60000;
 const maxDelay = 2_147_483_647;
@@ -23,7 +24,13 @@ export function createUsageAlertController({ storage, locks, Notification = glob
   function invalidate() { lifecycle++; clearTimer(); }
   function read(key) { try { return storage.getItem(key); } catch (error) { report(error); return undefined; } }
   function write(key, value) { try { storage.setItem(key, value); return true; } catch (error) { report(error); return false; } }
-  function clearLedger() { try { storage.removeItem(ledgerKey); return true; } catch (error) { report(error); return false; } }
+  function clearLedger() { try { storage.removeItem(ledgerKey); storage.removeItem(retryKey); return true; } catch (error) { report(error); return false; } }
+  function sharedRetries() {
+    const raw = read(retryKey);
+    if (raw === undefined) return null;
+    try { return raw === null ? [] : JSON.parse(raw).filter(row => /^[a-f0-9]{64}$/.test(row?.fingerprint) && Number.isFinite(row.retryAt) && row.retryAt > now()); }
+    catch { return []; }
+  }
   function active() {
     if (!enabled || paused || Notification?.permission !== 'granted') return false;
     if (read(preferenceKey) !== 'true') { enabled = false; invalidate(); return false; }
@@ -78,11 +85,13 @@ export function createUsageAlertController({ storage, locks, Notification = glob
       if (windows(snapshot).some(row => row.kind === event.kind)) events.push({ ...event, dueAt: Math.max(event.dueAt, retries.get(event.kind) ?? 0) });
     }
     const existing = ledger();
-    if (!existing) return [];
+    const pending = sharedRetries();
+    if (!existing || !pending) return [];
     const results = [];
     for (const event of events) {
       const hash = await fingerprint(event);
-      if (!existing.some(row => row.fingerprint === hash && row.milestone === event.milestone)) results.push({ ...event, fingerprint: hash });
+      const retryAt = event.milestone === 'reset' ? pending.find(row => row.fingerprint === hash)?.retryAt ?? 0 : 0;
+      if (!existing.some(row => row.fingerprint === hash && row.milestone === event.milestone)) results.push({ ...event, dueAt: Math.max(event.dueAt, retryAt), fingerprint: hash });
     }
     return results;
   }
@@ -109,8 +118,14 @@ export function createUsageAlertController({ storage, locks, Notification = glob
       await locks.request(lockName, { mode: 'exclusive' }, async () => {
         if (!active() || expectedLifecycle !== lifecycle) return;
         const existing = ledger();
-        if (!existing) return;
-        targets = targets.filter(item => !existing.some(row => row.fingerprint === item.fingerprint && row.milestone === item.milestone));
+        const pending = sharedRetries();
+        if (!existing || !pending) return;
+        targets = targets.filter(item => {
+          if (existing.some(row => row.fingerprint === item.fingerprint && row.milestone === item.milestone)) return false;
+          const retryAt = item.milestone === 'reset' ? pending.find(row => row.fingerprint === item.fingerprint)?.retryAt : null;
+          if (retryAt) { retries.set(item.kind, retryAt); return false; }
+          return true;
+        });
         if (!targets.length) return;
         const before = snapshot;
         const fresh = await refresh?.();
@@ -125,7 +140,15 @@ export function createUsageAlertController({ storage, locks, Notification = glob
           const valid = event.milestone === 'reset'
             ? row && event.resetsAt * 1000 <= at && row.resetsAt > event.resetsAt && row.resetsAt * 1000 > at
             : same && row.resetsAt * 1000 > at && (event.milestone === 'low' ? row.remainingPercent <= 20 : row.resetsAt * 1000 - at <= 30 * minute);
-          if (!valid) { if (event.milestone === 'reset') retries.set(event.kind, at + minute); continue; }
+          if (!valid) {
+            if (event.milestone === 'reset') {
+              const retryAt = at + minute;
+              retries.set(event.kind, retryAt);
+              const shared = sharedRetries();
+              if (!shared || !write(retryKey, JSON.stringify([...shared.filter(row => row.fingerprint !== event.fingerprint).slice(-49), { fingerprint: event.fingerprint, retryAt }]))) { paused = true; return; }
+            }
+            continue;
+          }
           if (!active() || expectedLifecycle !== lifecycle || validatedVersion !== version) return;
           const currentLedger = ledger();
           if (!currentLedger || currentLedger.some(item => item.fingerprint === event.fingerprint && item.milestone === event.milestone)) continue;

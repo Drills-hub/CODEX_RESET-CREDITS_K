@@ -179,3 +179,19 @@ test('missing reset verification data suspends pending transitions without a zer
   assert.equal(h.reads, 1); assert.equal(h.notices.length, 0);
   assert.equal(h.timers.filter(row => !row.cancelled).length, 0);
 });
+
+test('tabs share a reset retry deadline even when delivery locks serialize their checks', async () => {
+  const shared = new Map(); const lockState = new Map(); let reads = 0;
+  const old = value({ reset: at / 1000 - 1 });
+  const refresh = async () => { reads++; return old; };
+  const a = harness({ shared, lockState, refresh }); const b = harness({ shared, lockState, refresh });
+  a.update(old); b.update(old); await a.controller.requestEnable(); b.controller.restore();
+  await Promise.all([a.run(), b.run()]);
+  assert.equal(reads, 1);
+  assert.equal(a.timers.find(row => !row.cancelled).delay, 60000);
+  assert.equal(b.timers.find(row => !row.cancelled).delay, 60000);
+  a.setNow(at + 60000); b.setNow(at + 60000);
+  await Promise.all([a.run(), b.run()]);
+  assert.equal(reads, 2);
+  assert.doesNotMatch(shared.get('reset-check.usage-alerts.retry.v1'), /remainingPercent|resetsAt|synthetic-account/);
+});

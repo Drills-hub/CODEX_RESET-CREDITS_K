@@ -5,6 +5,7 @@ import { recommendUsage } from './usage-timing.mjs';
 import { createUsageAlertController } from './usage-alerts.mjs';
 import { createUsageForecastController } from './usage-forecast.mjs';
 import { compareStartTimes } from './start-time-comparison.mjs';
+import { createUsageReadCoordinator } from './usage-read-coordinator.mjs';
 
 const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at', 'recommendation-disclaimer', 'usage-alerts-toggle', 'usage-alerts-status'].map(id => [id, document.getElementById(id)]));
 const usageElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`usage-${kind}`) }));
@@ -22,6 +23,7 @@ let reminders;
 let usageAlerts;
 let forecast;
 let activeRefresh;
+let readCoordinator;
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 
 function node(tag, value, className) {
@@ -229,9 +231,9 @@ async function refreshSnapshot() {
   const run = (async () => {
     dispatch({ type: 'loading' });
     try {
-      const snapshot = await api('/api/reset-credits/read', { method: 'POST' });
+      const snapshot = await readCoordinator.run();
       dispatch({ type: 'success', snapshot });
-      return snapshot;
+      return state.snapshot === snapshot ? snapshot : null;
     }
     catch (error) {
       dispatch({ type: 'failure', error: failure(error) });
@@ -255,6 +257,8 @@ async function start() {
     if (token) await api('/api/session', { method: 'POST', data: { token } });
     else await api('/api/status');
     sessionReady = true;
+    readCoordinator = createUsageReadCoordinator({ locks: globalThis.navigator?.locks, BroadcastChannel: globalThis.BroadcastChannel,
+      read: () => api('/api/reset-credits/read', { method: 'POST' }) });
     reminders = createReminderController({
       storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
       locks: globalThis.navigator?.locks,
@@ -274,6 +278,7 @@ async function start() {
     render();
     setInterval(pollStatus, 5000);
   } catch {
+    readCoordinator?.close();
     dispatch({ type: 'failure', error: { code: 'SESSION', message: '앱에서 열린 브라우저로 접속해 주세요. 터미널에서 앱을 종료한 뒤 npm start로 다시 실행할 수 있습니다.', clearPrevious: true } });
   }
 }
@@ -297,7 +302,7 @@ addEventListener('storage', event => {
   }
   if (event.key === null || event.key === 'reset-check.usage-alerts.enabled.v1') { usageAlerts?.restore(); render(); }
 });
-addEventListener('pagehide', () => { usageAlerts?.pause(); forecast?.disable(); });
+addEventListener('pagehide', event => { usageAlerts?.pause(); forecast?.disable(); if (!event.persisted) readCoordinator?.close(); });
 addEventListener('pageshow', event => { if (event.persisted) void refresh(); });
 setInterval(tick, 1000);
 start();

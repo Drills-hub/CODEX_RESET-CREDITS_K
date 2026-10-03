@@ -8,9 +8,9 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/codex.test.mjs test/http.test.mjs test/model.test.mjs test/view-state.test.mjs test/notifications.test.mjs test/usage-timing.test.mjs test/usage-alerts.test.mjs test/usage-forecast.test.mjs test/start-time-comparison.test.mjs",
+    "test": "node --test test/codex.test.mjs test/http.test.mjs test/model.test.mjs test/view-state.test.mjs test/notifications.test.mjs test/usage-timing.test.mjs test/usage-alerts.test.mjs test/usage-forecast.test.mjs test/start-time-comparison.test.mjs test/usage-read-coordinator.test.mjs",
     "test:browser": "node --test test/browser.test.mjs",
-    "check": "node --check server.mjs && node --check lib/codex.mjs && node --check lib/service.mjs && node --check lib/usage.mjs && node --check public/app.mjs && node --check public/usage-timing.mjs && node --check public/usage-alerts.mjs && node --check public/usage-forecast.mjs && node --check public/start-time-comparison.mjs && node --check public/state.mjs"
+    "check": "node --check server.mjs && node --check lib/codex.mjs && node --check lib/service.mjs && node --check lib/usage.mjs && node --check public/app.mjs && node --check public/usage-timing.mjs && node --check public/usage-alerts.mjs && node --check public/usage-forecast.mjs && node --check public/start-time-comparison.mjs && node --check public/usage-read-coordinator.mjs && node --check public/state.mjs"
   },
   "devDependencies": {
     "playwright": "^1.63.0"
