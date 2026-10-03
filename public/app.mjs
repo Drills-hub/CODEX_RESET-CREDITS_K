@@ -16,6 +16,12 @@ const comparisonRoot = document.getElementById('start-time-comparison');
 const comparisonStatus = document.getElementById('comparison-status');
 const comparisonQueriedAt = document.getElementById('comparison-queried-at');
 const comparisonElements = ['now', 'five-hour', 'weekly'].map(key => ({ key, element: document.getElementById(`comparison-${key}`) }));
+const usageAnnouncement = document.getElementById('usage-announcement');
+const busyPanels = ['usage-panel', 'recommendation', 'start-time-comparison', 'usage-alerts', 'usage-forecast'].map(id => document.getElementById(id));
+const announcementKeys = new Map();
+const pendingAnnouncements = new Map();
+let announcementScheduled = false;
+let queryAnnouncementSequence = 0;
 let state = initialState();
 let renderedSnapshot;
 let sessionReady = false;
@@ -26,6 +32,8 @@ let activeRefresh;
 let readCoordinator;
 let pageSuspended = false;
 let pageGeneration = 0;
+let usageAlertError = '';
+let reminderError = '';
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 
 function node(tag, value, className) {
@@ -34,11 +42,26 @@ function node(tag, value, className) {
   if (className) element.className = className;
   return element;
 }
+function announceStatus(category, key, message, announceInitial = true) {
+  const seen = announcementKeys.has(category);
+  if (seen && announcementKeys.get(category) === key) return;
+  announcementKeys.set(category, key);
+  pendingAnnouncements.delete(category);
+  if (!message || (!seen && !announceInitial)) return;
+  pendingAnnouncements.set(category, message);
+  if (announcementScheduled) return;
+  announcementScheduled = true;
+  queueMicrotask(() => {
+    announcementScheduled = false;
+    const messages = [...pendingAnnouncements.values()]; pendingAnnouncements.clear();
+    if (!pageSuspended && messages.length) usageAnnouncement.textContent = messages.join(' ');
+  });
+}
 function dispatch(event) {
   const previousSnapshot = state.snapshot;
   state = updateState(state, event);
   if (reminders) {
-    if (event.type === 'success' && state.snapshot === event.snapshot) reminders.update(event.snapshot);
+    if (event.type === 'success' && state.snapshot === event.snapshot) { reminderError = ''; reminders.update(event.snapshot); }
     else if (event.type === 'failure') {
       if (state.snapshot) reminders.pause();
       else reminders.update(undefined);
@@ -46,7 +69,7 @@ function dispatch(event) {
     else if (event.type === 'status' && previousSnapshot && !state.snapshot) reminders.update(undefined);
   }
   if (usageAlerts) {
-    if (event.type === 'success' && state.snapshot === event.snapshot) usageAlerts.update(event.snapshot);
+    if (event.type === 'success' && state.snapshot === event.snapshot) { usageAlertError = ''; usageAlerts.update(event.snapshot); }
     else if (event.type === 'failure' || event.type === 'status') {
       if (!state.snapshot) usageAlerts.update(undefined);
       else if (state.usageStale || !state.connected) usageAlerts.pause();
@@ -60,6 +83,18 @@ function dispatch(event) {
     }
   }
   render();
+  if (previousSnapshot && !state.snapshot) {
+    pendingAnnouncements.delete('query');
+    announceStatus('account', `${state.revision}:${state.authState}`, '계정 상태가 변경되어 이전 사용량 결과를 지웠습니다.');
+  } else if (event.type === 'success' && state.snapshot === event.snapshot) {
+    const balance = kind => {
+      const value = state.snapshot.usageWindows?.find(row => row.kind === kind)?.remainingPercent;
+      return Number.isInteger(value) && value >= 0 && value <= 100 ? `${value}%` : '확인 불가';
+    };
+    announceStatus('query', ++queryAnnouncementSequence, `사용량 조회 완료. 5시간 ${balance('five-hour')}, 주간 ${balance('weekly')}. 추천: ${elements['recommendation-title'].textContent}`);
+  } else if (event.type === 'failure') {
+    announceStatus('query', ++queryAnnouncementSequence, state.snapshot ? '최신 사용량 조회에 실패했습니다. 이전 결과를 표시합니다.' : '사용량을 조회하지 못했습니다. 로그인과 연결 상태를 확인해 주세요.');
+  }
 }
 function render() {
   const ready = state.connected && state.authState === 'chatgpt';
@@ -68,22 +103,29 @@ function render() {
   elements.refresh.disabled = state.loading || !sessionReady;
   elements.refresh.textContent = state.loading ? '조회 중…' : '새로고침 ↻';
   document.body.dataset.loading = String(state.loading);
-  elements.notice.textContent = state.message;
+  if (elements.notice.textContent !== state.message) elements.notice.textContent = state.message;
   elements.notice.dataset.kind = state.kind;
   if (reminders) {
-    elements['notifications-toggle'].disabled = !sessionReady || !reminders.available;
+    elements['notifications-toggle'].disabled = !sessionReady || !reminders.available || (globalThis.Notification?.permission === 'denied' && !reminders.enabled);
+    elements['notifications-toggle'].setAttribute('aria-pressed', String(reminders.enabled));
     elements['notifications-toggle'].textContent = reminders.enabled ? '알림 끄기' : '알림 켜기';
-    elements['notifications-status'].textContent = reminders.enabled
+    const reason = reminderError || reminders.reason;
+    elements['notifications-status'].textContent = reason || (reminders.enabled
       ? '알림이 켜졌습니다. 이 브라우저 탭이 열려 있을 때만 확인합니다.'
-      : reminders.reason || '브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.';
+      : '브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.');
+    announceStatus('reminders', `${reminders.enabled}:${reason}`, reason ? `만료 알림: ${reason}` : '', false);
   }
   if (usageAlerts) {
-    elements['usage-alerts-toggle'].disabled = !sessionReady || !usageAlerts.available;
+    elements['usage-alerts-toggle'].disabled = !sessionReady || !usageAlerts.available || (globalThis.Notification?.permission === 'denied' && !usageAlerts.enabled);
+    elements['usage-alerts-toggle'].setAttribute('aria-pressed', String(usageAlerts.enabled));
     elements['usage-alerts-toggle'].textContent = usageAlerts.enabled ? '사용량 알림 끄기' : '사용량 알림 켜기';
-    elements['usage-alerts-status'].textContent = usageAlerts.reason || (usageAlerts.enabled
+    elements['usage-alerts-status'].textContent = usageAlertError || usageAlerts.reason || (usageAlerts.enabled
       ? '사용량 알림이 켜졌습니다. 열린 탭에서 발송 전 재조회합니다.'
       : '리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.');
+    const reason = usageAlertError || usageAlerts.reason;
+    announceStatus('usage-alerts', `${usageAlerts.enabled}:${reason}`, reason ? `사용량 알림: ${reason}` : '', false);
   }
+  for (const panel of busyPanels) panel.setAttribute('aria-busy', String(state.loading));
   elements.credits.setAttribute('aria-busy', String(state.loading));
   const snapshot = state.snapshot;
   if (renderedSnapshot !== snapshot) {
@@ -139,6 +181,8 @@ function renderUsage(snapshot) {
     element.querySelector('.usage-reset').textContent = formatKst(row?.resetsAt);
     const hasReset = Number.isSafeInteger(row?.resetsAt);
     const passed = hasReset && row.resetsAt * 1000 <= now;
+    if (!state.loading && !state.usageStale) announceStatus(`reset-${kind}`, `${snapshot?.accountScope}:${snapshot?.revision}:${row?.resetsAt}:${passed}`, passed
+      ? `${kind === 'five-hour' ? '5시간' : '주간'} 리셋 시각이 지났습니다. 최신 사용량을 재조회해 주세요.` : '');
     resetPassed ||= passed;
     element.querySelector('.usage-remaining').textContent = passed ? '리셋 시각 경과 — 새로고침 필요'
       : hasReset ? remainingTime(row.resetsAt, now) : '리셋 시각 확인 불가';
@@ -163,11 +207,15 @@ function renderRecommendation(snapshot) {
   elements['recommendation-disclaimer'].textContent = actionable
     ? '잔여량을 활용하기 위한 권고이며, 작업 횟수나 사용 가능 시간을 보장하지 않습니다.'
     : '최신 상태를 확인한 뒤 사용 시점을 다시 안내합니다.';
+  const expired = snapshot?.usageWindows?.some(row => Number.isSafeInteger(row.resetsAt) && row.resetsAt * 1000 <= Date.now());
+  announceStatus('recommendation', `${snapshot?.accountScope}:${recommendation.code}`, recommendation.code === 'refresh-needed' && !expired && !state.usageStale
+    ? recommendation.title : '', false);
 }
 function renderForecast() {
   const enabled = forecast?.enabled ?? false;
   forecastToggle.disabled = !sessionReady;
   forecastToggle.textContent = enabled ? '추세 끄기' : '추세 켜기';
+  forecastToggle.setAttribute('aria-pressed', String(enabled));
   forecastStatus.textContent = enabled ? '화면이 보일 때 5분마다 조회합니다. 최근 30분의 성공 조회를 메모리에만 보관합니다.'
     : '추세를 켜면 사용 속도와 예상 소진 시각을 계산합니다. 종료·새로고침 시 이력을 삭제합니다.';
   const messages = {
@@ -185,6 +233,9 @@ function renderForecast() {
     element.querySelector('.forecast-rate').textContent = Number.isFinite(row?.ratePerHour) ? `${row.ratePerHour.toFixed(1)}%p/시간` : '—';
     element.querySelector('.forecast-exhaustion').textContent = row?.exhaustsAt != null ? formatKst(row.exhaustsAt) : '—';
     element.querySelector('.forecast-samples').textContent = `최근 30분 성공 조회 ${row?.samples ?? 0}건`;
+    const informative = row && ['forecast', 'stale', 'reset-passed', 'estimate-passed'].includes(row.state);
+    const message = informative ? `${kind === 'five-hour' ? '5시간' : '주간'} 추세: ${messages[row.state]}${row.state === 'forecast' ? ` 예상 소진 시각 ${formatKst(row.exhaustsAt)}` : ''}` : '';
+    announceStatus(`forecast-${kind}`, `${state.snapshot?.accountScope}:${row?.resetsAt}:${row?.state ?? 'off'}`, message);
   }
 }
 function renderComparison() {
@@ -277,11 +328,12 @@ async function start() {
       Notification: globalThis.Notification,
       crypto: globalThis.crypto,
       refresh: refreshSnapshot,
+      onError: () => { reminderError = '알림을 확인하지 못했습니다. 브라우저 저장소와 설정을 확인해 주세요.'; render(); },
     });
     usageAlerts = createUsageAlertController({
       storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
       locks: globalThis.navigator?.locks, Notification: globalThis.Notification, crypto: globalThis.crypto,
-      refresh: refreshSnapshot, onError: () => render(),
+      refresh: refreshSnapshot, onError: () => { usageAlertError = '알림을 확인하지 못했습니다. 브라우저 저장소와 설정을 확인해 주세요.'; render(); },
     });
     forecast = createUsageForecastController({ refresh: refreshSnapshot, onChange: renderForecast });
     await refresh();
@@ -296,11 +348,13 @@ async function start() {
 }
 elements.refresh.addEventListener('click', refresh);
 elements['notifications-toggle'].addEventListener('click', async () => {
+  reminderError = '';
   if (reminders?.enabled) reminders.disable();
   else if (reminders) await reminders.requestEnable();
   render();
 });
 elements['usage-alerts-toggle'].addEventListener('click', async () => {
+  usageAlertError = '';
   if (usageAlerts?.enabled) usageAlerts.disable();
   else if (usageAlerts) await usageAlerts.requestEnable();
   render();

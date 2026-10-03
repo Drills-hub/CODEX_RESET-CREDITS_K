@@ -532,6 +532,151 @@ test('BFCache restoration discards the prior in-flight response and performs a f
   assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
 });
 
+test('usage panels expose busy and pressed state and live summaries without repeated clock announcements', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => {
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function () {}, { permission: 'granted', requestPermission: async () => 'granted' }) });
+  });
+  const at = Math.floor(Date.now() / 1000); let release;
+  const value = { ...longSnapshot, queriedAt: at, accountScope: 'accessible-scope', ordinaryUsageAllowed: true, usageWindows: [
+    { ...longSnapshot.usageWindows[0], resetsAt: at + 7200 },
+    { ...longSnapshot.usageWindows[1], remainingPercent: 50, usedPercent: 50, resetsAt: at + 172800 },
+  ] };
+  const page = await openApp(t, { context, clockTime: at * 1000, read: n => {
+    if (n === 2) return new Promise(resolve => { release = () => resolve(value); });
+    if (n === 3) throw new AppError('TIMEOUT');
+    return value;
+  } });
+  const live = page.locator('#usage-announcement');
+  assert.equal(await live.getAttribute('role'), 'status'); assert.equal(await live.getAttribute('aria-live'), 'polite'); assert.equal(await live.getAttribute('aria-atomic'), 'true');
+  assert.match(await live.textContent(), /조회 완료.*65%.*50%/);
+  const panels = ['usage-panel', 'recommendation', 'start-time-comparison', 'usage-alerts', 'usage-forecast'];
+  for (const id of panels) assert.equal(await page.locator(`#${id}`).getAttribute('aria-busy'), 'false');
+  for (const id of ['notifications-toggle', 'usage-alerts-toggle', 'forecast-toggle']) {
+    const toggle = page.locator(`#${id}`); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+    await toggle.click(); await page.waitForFunction(id => document.getElementById(id).getAttribute('aria-pressed') === 'true', id);
+    await toggle.click(); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+  }
+  await page.evaluate(() => {
+    globalThis.__liveMutations = 0;
+    const observer = new MutationObserver(records => { __liveMutations += records.length; });
+    observer.observe(document.getElementById('usage-announcement'), { childList: true, subtree: true, characterData: true });
+    observer.observe(document.getElementById('notice'), { childList: true, subtree: true, characterData: true });
+  });
+  await page.clock.runFor(6000);
+  assert.equal(await page.evaluate(() => __liveMutations), 0);
+  await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'true');
+  for (const id of panels) assert.equal(await page.locator(`#${id}`).getAttribute('aria-busy'), 'true');
+  for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(release); release(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  for (const id of panels) assert.equal(await page.locator(`#${id}`).getAttribute('aria-busy'), 'false');
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('이전 결과'));
+});
+
+test('reset and account boundaries announce once and clear old usage summaries', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let signedOut = false;
+  const page = await openApp(t, { clockTime: at * 1000, authState: () => signedOut ? 'signed-out' : 'chatgpt', read: n => {
+    if (n > 1) { signedOut = true; throw new AppError('LOGIN_REQUIRED'); }
+    return { ...longSnapshot, queriedAt: at, usageWindows: [
+      { ...longSnapshot.usageWindows[0], resetsAt: at + 60 }, longSnapshot.usageWindows[1],
+    ] };
+  } });
+  await page.clock.runFor(61000);
+  assert.match(await page.locator('#usage-announcement').textContent(), /리셋 시각이 지났/);
+  await page.evaluate(() => {
+    globalThis.__boundaryMutations = 0;
+    new MutationObserver(records => { __boundaryMutations += records.length; }).observe(document.getElementById('usage-announcement'), { childList: true });
+  });
+  await page.clock.runFor(3000); assert.equal(await page.evaluate(() => __boundaryMutations), 0);
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('계정 상태가 변경'));
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '—');
+});
+
+test('forecast readiness and failure are announced on their state boundaries', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let reads = 0;
+  const page = await openApp(t, { clockTime: at * 1000, read: () => {
+    const index = reads++;
+    if (index === 3) throw new AppError('TIMEOUT');
+    return { ...longSnapshot, queriedAt: at + index * 300, accountScope: 'forecast-announcement', usageWindows: [
+      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - index * 10, resetsAt: at + 18000 },
+    ] };
+  } });
+  await page.locator('#forecast-toggle').click();
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('예상 소진 시각'));
+  assert.match(await page.locator('#usage-announcement').textContent(), /5시간 추세/);
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'stale');
+  assert.match(await page.locator('#usage-announcement').textContent(), /추세.*조회 실패.*보류/);
+});
+
+test('notification storage failure is announced without raw errors or a pressed toggle', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => {
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function () {}, { permission: 'granted', requestPermission: async () => 'granted' }) });
+    const write = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === 'reset-check.usage-alerts.enabled.v1') throw new Error('PRIVATE_WRITE_ERROR');
+      return write.call(this, key, value);
+    };
+  });
+  const page = await openApp(t, { context, read: () => ({ ...longSnapshot, accountScope: 'error-scope' }) });
+  await page.locator('#usage-alerts-toggle').click();
+  await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('사용량 알림:'));
+  assert.match(await page.locator('#usage-announcement').textContent(), /저장소/);
+  assert.doesNotMatch(await page.locator('#usage-announcement').textContent(), /PRIVATE/);
+  assert.equal(await page.locator('#usage-alerts-toggle').getAttribute('aria-pressed'), 'false');
+});
+
+test('a reset reached during a delayed read is announced after that read finishes', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let release;
+  const value = { ...longSnapshot, queriedAt: at, usageWindows: [
+    { ...longSnapshot.usageWindows[0], resetsAt: at + 5 }, longSnapshot.usageWindows[1],
+  ] };
+  const page = await openApp(t, { clockTime: at * 1000, read: n => n === 1 ? value : new Promise(resolve => { release = () => resolve(value); }) });
+  await page.locator('#refresh').click();
+  for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(release); await page.clock.runFor(6000); release();
+  await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.match(await page.locator('#usage-announcement').textContent(), /리셋 시각이 지났/);
+});
+
+test('missing crypto disables notifications with an explicit accessible reason', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => { Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined }); });
+  const page = await openApp(t, { context });
+  assert.equal(await page.locator('#notifications-toggle').isDisabled(), true);
+  assert.equal(await page.locator('#notifications-toggle').getAttribute('aria-pressed'), 'false');
+  assert.match(await page.locator('#notifications-status').innerText(), /암호화/);
+});
+
+test('an enabled expiry reminder shows delivery errors in both visible and live status', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => {
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function () { throw new Error('PRIVATE_NOTIFICATION_ERROR'); },
+      { permission: 'granted', requestPermission: async () => 'granted' }) });
+  });
+  const at = Math.floor(Date.now() / 1000);
+  const page = await openApp(t, { context, clockTime: at * 1000, read: () => ({ ...longSnapshot, queriedAt: at, accountScope: 'reminder-scope', credits: [
+    { ...longSnapshot.credits[0], reminderKey: 'synthetic-key', grantedAt: at - 100, expiresAt: at + 3601 },
+  ] }) });
+  await page.locator('#notifications-toggle').click();
+  await page.clock.runFor(2000);
+  await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('만료 알림:'));
+  assert.match(await page.locator('#notifications-status').innerText(), /확인하지 못/);
+  assert.doesNotMatch(await page.locator('#notifications-status').innerText(), /알림이 켜졌습니다/);
+  assert.doesNotMatch(await page.locator('#usage-announcement').textContent(), /PRIVATE/);
+  assert.equal(await page.locator('#notifications-toggle').getAttribute('aria-pressed'), 'true');
+});
+
 test('empty, count-only, unavailable, refresh failure, and login-needed states render without overflow', async t => {
   if (skipWithoutBrowser(t)) return;
   const cases = [

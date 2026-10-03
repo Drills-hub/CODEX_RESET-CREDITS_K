@@ -19,7 +19,8 @@
       <button id="refresh" type="button">새로고침 <span aria-hidden="true">↻</span></button>
     </section>
     <div id="notice" class="notice" role="status" aria-live="polite">Codex 계정에 연결하고 있습니다.</div>
-    <section class="usage" aria-labelledby="usage-title">
+    <div id="usage-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <section id="usage-panel" class="usage" aria-labelledby="usage-title" aria-busy="false">
       <div class="section-title"><h2 id="usage-title">잔여 사용량</h2><span>KST · UTC+09:00</span></div>
       <p id="usage-status" class="muted">조회 후 사용 한도를 표시합니다.</p>
       <div class="usage-grid">
@@ -37,7 +38,7 @@
         </article>
       </div>
     </section>
-    <section id="recommendation" class="recommendation" aria-labelledby="recommendation-heading">
+    <section id="recommendation" class="recommendation" aria-labelledby="recommendation-heading" aria-busy="false">
       <h2 id="recommendation-heading">사용 시점 추천</h2>
       <h3 id="recommendation-title">조회 후 사용 시점을 안내합니다.</h3>
       <p id="recommendation-reason">5시간·주간 한도를 조회해 주세요.</p>
@@ -45,7 +46,7 @@
       <p class="recommendation-meta">마지막 조회 <span id="recommendation-queried-at">—</span></p>
       <p id="recommendation-disclaimer" class="recommendation-meta">조회가 완료되면 최신 사용량을 기준으로 안내합니다.</p>
     </section>
-    <section id="start-time-comparison" class="comparison" aria-labelledby="comparison-title">
+    <section id="start-time-comparison" class="comparison" aria-labelledby="comparison-title" aria-busy="false">
       <div class="section-title"><h2 id="comparison-title">작업 시작 시각 비교</h2><span>KST · UTC+09:00</span></div>
       <p id="comparison-status" class="muted">조회 후 작업 시작 시각을 비교합니다.</p>
       <table>
@@ -60,13 +61,13 @@
       <p class="comparison-meta muted">마지막 조회 <span id="comparison-queried-at">—</span></p>
       <p class="comparison-meta muted">미래 잔여량이나 사용 권한을 확정하지 않습니다. 실제 작업 시작 전에 새로고침으로 확인하세요.</p>
     </section>
-    <section id="usage-alerts" class="notifications" aria-labelledby="usage-alerts-title">
-      <div class="section-title"><h2 id="usage-alerts-title">사용량 알림</h2><button id="usage-alerts-toggle" type="button" disabled>사용량 알림 켜기</button></div>
+    <section id="usage-alerts" class="notifications" aria-labelledby="usage-alerts-title" aria-busy="false">
+      <div class="section-title"><h2 id="usage-alerts-title">사용량 알림</h2><button id="usage-alerts-toggle" type="button" aria-pressed="false" disabled>사용량 알림 켜기</button></div>
       <p id="usage-alerts-status" class="muted">리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.</p>
       <p class="muted">앱과 탭이 열려 있을 때만 동작합니다. 잔여량은 새 조회가 있을 때 확인합니다.</p>
     </section>
-    <section id="usage-forecast" class="forecast" aria-labelledby="forecast-title">
-      <div class="section-title"><h2 id="forecast-title">사용 추세</h2><button id="forecast-toggle" type="button" disabled>추세 켜기</button></div>
+    <section id="usage-forecast" class="forecast" aria-labelledby="forecast-title" aria-busy="false">
+      <div class="section-title"><h2 id="forecast-title">사용 추세</h2><button id="forecast-toggle" type="button" aria-pressed="false" disabled>추세 켜기</button></div>
       <p id="forecast-status" class="muted">추세를 켜면 사용 속도와 예상 소진 시각을 계산합니다.</p>
       <div class="usage-grid">
         <article id="forecast-five-hour" class="forecast-window" aria-labelledby="forecast-five-hour-title">
@@ -87,7 +88,7 @@
       <div class="next-expiry"><p class="label">조회된 리셋권 중 가장 가까운 만료</p><p id="nearest">아직 조회하지 않았습니다.</p><p id="nearest-remaining" class="muted"></p></div>
     </section>
     <section class="notifications" aria-labelledby="notifications-title">
-      <div class="section-title"><h2 id="notifications-title">만료 알림</h2><button id="notifications-toggle" type="button" disabled>알림 켜기</button></div>
+      <div class="section-title"><h2 id="notifications-title">만료 알림</h2><button id="notifications-toggle" type="button" aria-pressed="false" disabled>알림 켜기</button></div>
       <p id="notifications-status" class="muted">브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.</p>
     </section>
     <section class="details" aria-labelledby="details-title">

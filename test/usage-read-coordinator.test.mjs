@@ -137,3 +137,11 @@ test('a new read in the same clock millisecond cannot reuse a completed peer res
   assert.equal((await follower.run()).queriedAt, 102);
   assert.equal(reads, 2);
 });
+
+test('usage reads remain available when browser crypto is not supported', async t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined });
+  t.after(() => Object.defineProperty(globalThis, 'crypto', original));
+  const controller = createUsageReadCoordinator({ read: async () => snapshot });
+  assert.deepEqual(await controller.run(), snapshot); controller.close();
+});

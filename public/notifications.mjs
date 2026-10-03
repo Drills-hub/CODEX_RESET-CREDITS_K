@@ -171,6 +171,7 @@ export function createReminderController({ storage, locks, Notification, crypto 
     get enabled() { return enabled; },
     get reason() {
       if (!storage) return '이 브라우저는 로컬 저장소를 사용할 수 없어 알림을 켤 수 없습니다.';
+      if (!crypto?.subtle) return '이 브라우저의 암호화 기능을 사용할 수 없어 알림을 켤 수 없습니다.';
       if (!locks?.request) return '이 브라우저는 탭 간 잠금 기능을 지원하지 않아 알림을 켤 수 없습니다.';
       if (!Notification) return '이 브라우저는 알림 기능을 지원하지 않습니다.';
       if (Notification.permission === 'denied') return '브라우저 알림 권한이 차단되어 있습니다. 사이트 설정에서 허용해 주세요.';

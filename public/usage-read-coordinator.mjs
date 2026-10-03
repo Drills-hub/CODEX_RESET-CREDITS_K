@@ -2,7 +2,7 @@ const lockName = 'reset-check.usage-read.lock.v1';
 const channelName = 'reset-check.usage-read.channel.v1';
 const connectionError = () => ({ code: 'CONNECTION', message: '사용량 조회 연결이 종료되었습니다. 다시 조회해 주세요.', clearPrevious: false });
 const timeoutError = () => ({ code: 'TIMEOUT', message: '사용량 조회를 기다리는 시간이 초과됐습니다. 다시 조회해 주세요.', clearPrevious: false });
-const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.prototype.hasOwnProperty.call(value, key)).map(key => [key, value[key]]));
 function snapshotPayload(value) {
   if (!value || !Number.isSafeInteger(value.queriedAt) || !Number.isSafeInteger(value.revision)) throw connectionError();
   const result = pick(value, ['queriedAt', 'availableCount', 'detailState', 'ordinaryUsageAllowed', 'revision', 'accountScope']);
@@ -67,7 +67,8 @@ export function createUsageReadCoordinator({ locks, BroadcastChannel, read, time
   function run() {
     if (closed) return Promise.reject(connectionError());
     if (active) return active.promise;
-    const operation = { id: globalThis.crypto.randomUUID(), participants: new Set(), done: false };
+    const id = globalThis.crypto?.randomUUID?.() ?? `read-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const operation = { id, participants: new Set(), done: false };
     operation.participants.add(operation.id);
     const promise = new Promise((resolve, reject) => { operation.resolve = resolve; operation.reject = reject; });
     operation.promise = promise.finally(() => { if (active === operation) active = undefined; });
