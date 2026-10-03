@@ -4,3 +4,17 @@
 .notifications .section-title{align-items:center}
 .notifications .section-title button{padding:8px 14px;font-size:13px}
 .notifications .muted{font-size:13px;margin-top:10px;overflow-wrap:anywhere}
+.usage{margin-top:28px;padding-bottom:24px;border-bottom:1px solid var(--border)}
+#usage-status{font-size:13px;margin:10px 0 20px;overflow-wrap:anywhere}
+.usage-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px}
+.usage-window{min-width:0}.usage-window+ .usage-window{border-left:1px solid var(--border);padding-left:32px}
+.usage-window h3{font-size:15px;font-weight:600;margin:0 0 12px}
+.usage-balance{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
+.usage-percent{font-size:36px;font-weight:600;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.usage-balance span,.usage-label,.usage-reset,.usage-remaining{font-size:13px}
+.usage-window progress{display:block;width:100%;height:8px;accent-color:var(--accent);margin:0 0 16px}
+.usage-window progress[hidden]{display:none}
+.usage-label{color:var(--muted);margin:16px 0 5px}.usage-reset{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.usage-remaining{margin-top:6px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+body[data-loading="true"] .usage{opacity:.6}
+@media(max-width:640px){.usage-grid{grid-template-columns:1fr;gap:24px}.usage-window+ .usage-window{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}}

@@ -69,3 +69,59 @@ test('stable reminder keys distinguish identical display rows without exposing r
   assert.equal(normalize([row])[0].reminderKey, undefined);
   assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_/);
 });
+
+test('usage windows are identified by duration, not primary and secondary position', () => {
+  const snapshot = normalizeCredits({ rateLimits: {
+    primary: { windowDurationMins: 10080, usedPercent: 80, resetsAt: 90000 },
+    secondary: { windowDurationMins: 300, usedPercent: 35, resetsAt: 18000 },
+    accountId: 'SECRET_USAGE',
+  }, ordinaryUsageAllowed: false }, 1000);
+  assert.deepEqual(snapshot.usageWindows, [
+    { kind: 'five-hour', windowDurationMins: 300, usedPercent: 35, remainingPercent: 65, resetsAt: 18000, state: 'complete' },
+    { kind: 'weekly', windowDurationMins: 10080, usedPercent: 80, remainingPercent: 20, resetsAt: 90000, state: 'complete' },
+  ]);
+  assert.equal(snapshot.ordinaryUsageAllowed, false);
+  assert.equal(snapshot.detailState, 'unavailable');
+  assert.doesNotMatch(JSON.stringify(snapshot), /SECRET_USAGE/);
+});
+
+test('usage values distinguish zero from missing and preserve independently valid fields', () => {
+  const snapshot = normalizeCredits({ rateLimits: {
+    primary: { windowDurationMins: 300, usedPercent: 100, resetsAt: null },
+    secondary: { windowDurationMins: 10080, usedPercent: null, resetsAt: 90000 },
+  } });
+  assert.equal(snapshot.usageWindows[0].remainingPercent, 0);
+  assert.equal(snapshot.usageWindows[0].state, 'partial');
+  assert.equal(snapshot.usageWindows[0].resetsAt, null);
+  assert.equal(snapshot.usageWindows[1].remainingPercent, null);
+  assert.equal(snapshot.usageWindows[1].resetsAt, 90000);
+  assert.equal(snapshot.ordinaryUsageAllowed, null);
+});
+
+test('malformed usage fields do not break credit details or invent a usage window', () => {
+  for (const usedPercent of [-1, 101, 0.5, '20', Infinity, NaN]) {
+    const snapshot = normalizeCredits({ rateLimits: {
+      primary: { windowDurationMins: 300, usedPercent, resetsAt: '18000' },
+      secondary: { windowDurationMins: 60, usedPercent: 10, resetsAt: 20000 },
+    }, ordinaryUsageAllowed: 'true', rateLimitResetCredits: { availableCount: 1, credits: [] } });
+    assert.equal(snapshot.availableCount, 1);
+    assert.equal(snapshot.usageWindows[0].state, 'invalid');
+    assert.equal(snapshot.usageWindows[0].remainingPercent, null);
+    assert.equal(snapshot.usageWindows[0].resetsAt, null);
+    assert.equal(snapshot.usageWindows[1].state, 'unavailable');
+    assert.equal(snapshot.ordinaryUsageAllowed, null);
+  }
+  for (const rateLimits of [{}, { primary: [] }, { primary: 'bad' }, { primary: { usedPercent: 0 } }]) {
+    assert.ok(normalizeCredits({ rateLimits }).usageWindows.every(row => row.state === 'unavailable'));
+  }
+});
+
+test('duplicate durations are ambiguous and never silently overwrite one another', () => {
+  const snapshot = normalizeCredits({ rateLimits: {
+    primary: { windowDurationMins: 300, usedPercent: 0, resetsAt: 18000 },
+    secondary: { windowDurationMins: 300, usedPercent: 100, resetsAt: 18001 },
+  } });
+  assert.equal(snapshot.usageWindows[0].state, 'invalid');
+  assert.equal(snapshot.usageWindows[0].remainingPercent, null);
+  assert.equal(snapshot.usageWindows[0].resetsAt, null);
+});

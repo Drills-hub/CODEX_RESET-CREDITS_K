@@ -19,12 +19,16 @@ console.log(`Browser QA screenshots: ${outputDir}`);
 const longSnapshot = {
   queriedAt: 1780000000, availableCount: 5, detailState: 'partial', revision: 0,
   credits: [{ number: 1, title: '긴 제목 '.repeat(28), status: 'available', grantedAt: 1770000000, expiresAt: 1781000000, expiryState: 'known' }],
+  usageWindows: [
+    { kind: 'five-hour', windowDurationMins: 300, usedPercent: 35, remainingPercent: 65, resetsAt: 4102444800, state: 'complete' },
+    { kind: 'weekly', windowDurationMins: 10080, usedPercent: 80, remainingPercent: 20, resetsAt: 4102531200, state: 'complete' },
+  ],
 };
 
-async function openApp(t, { read, authState = 'chatgpt', sessionDelayMs = 0, context = browser } = {}) {
+async function openApp(t, { read, authState = 'chatgpt', sessionDelayMs = 0, context = browser, clockTime } = {}) {
   let reads = 0;
   const service = {
-    status: async () => ({ connected: true, authState, revision: 0, busy: false }),
+    status: async () => ({ connected: true, authState: typeof authState === 'function' ? authState() : authState, revision: 0, busy: false }),
     read: async () => {
       reads++;
       return read ? read(reads) : structuredClone(longSnapshot);
@@ -36,6 +40,7 @@ async function openApp(t, { read, authState = 'chatgpt', sessionDelayMs = 0, con
   if (context.grantPermissions) await context.grantPermissions(['notifications'], { origin: app.origin });
   const page = await context.newPage();
   t.after(() => page.close());
+  if (clockTime !== undefined) await page.clock.install({ time: new Date(clockTime) });
   if (sessionDelayMs) await page.route('**/api/session', async route => {
     await new Promise(resolve => setTimeout(resolve, sessionDelayMs));
     await route.continue();
@@ -76,7 +81,7 @@ for (const width of widths) {
     const page = await openApp(t);
     await page.setViewportSize({ width, height: 950 });
     const geometry = await page.evaluate(() => {
-      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit'];
+      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status'];
       const boxes = selectors.map(selector => {
         const element = document.querySelector(selector);
         const rect = element.getBoundingClientRect();
@@ -122,6 +127,66 @@ for (const width of widths) {
     await page.screenshot({ path: join(outputDir, `long-partial-${width}.png`), fullPage: true });
   });
 }
+
+test('usage dashboard renders percentages and reset times and preserves them on refresh failure', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { read: n => {
+    if (n > 1) throw new AppError('TIMEOUT');
+    return structuredClone(longSnapshot);
+  } });
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
+  assert.equal(await page.locator('#usage-weekly .usage-percent').innerText(), '20%');
+  assert.match(await page.locator('#usage-five-hour .usage-reset').innerText(), /KST/);
+  assert.equal(await page.locator('#usage-five-hour progress').getAttribute('value'), '65');
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
+  assert.match(await page.locator('#usage-status').innerText(), /이전 조회|재조회/);
+});
+
+test('missing usage and login changes clear the dashboard without inventing zero percent', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let signedOut = false;
+  const page = await openApp(t, { read: n => {
+    if (n === 3) { signedOut = true; throw new AppError('LOGIN_REQUIRED'); }
+    return n === 1 ? structuredClone(longSnapshot) : { ...longSnapshot, usageWindows: undefined };
+  }, authState: () => signedOut ? 'signed-out' : 'chatgpt' });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#usage-five-hour .usage-percent')?.textContent === '—');
+  assert.equal(await page.locator('#usage-five-hour progress').isVisible(), false);
+  assert.match(await page.locator('#usage-five-hour .usage-reset').innerText(), /확인 불가/);
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#connection').textContent === '로그인 필요');
+  assert.equal(await page.locator('#usage-weekly .usage-percent').innerText(), '—');
+});
+
+test('usage countdown crosses reset without locally replenishing the percentage', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000);
+  const page = await openApp(t, { clockTime: at * 1000, read: () => ({ ...longSnapshot, usageWindows: [
+    { ...longSnapshot.usageWindows[0], remainingPercent: 0, usedPercent: 100, resetsAt: at + 60 },
+    longSnapshot.usageWindows[1],
+  ] }) });
+  await page.clock.fastForward(61000);
+  assert.match(await page.locator('#usage-five-hour .usage-remaining').innerText(), /리셋 시각 경과.*새로고침/);
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '0%');
+});
+
+test('server usage restriction remains visible after a reset or failed refresh', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { read: n => {
+    if (n > 1) throw new AppError('TIMEOUT');
+    return { ...longSnapshot, ordinaryUsageAllowed: false, usageWindows: [
+      { ...longSnapshot.usageWindows[0], resetsAt: 1 }, longSnapshot.usageWindows[1],
+    ] };
+  } });
+  assert.match(await page.locator('#usage-status').innerText(), /서버.*일반 사용.*제한/);
+  assert.match(await page.locator('#usage-status').innerText(), /재조회/);
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
+  assert.match(await page.locator('#usage-status').innerText(), /서버.*일반 사용.*제한/);
+  assert.match(await page.locator('#usage-status').innerText(), /이전 조회/);
+});
 
 test('waits for delayed session exchange and the initial credit read', async t => {
   if (skipWithoutBrowser(t)) return;
