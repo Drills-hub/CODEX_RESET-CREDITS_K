@@ -1,0 +1,47 @@
+# Node.js dependencies and package-manager output
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+auth.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Codex local state and cached credentials
+.codex/
+.agents/
+codex-login.log
+
+# Runtime files
+*.pid
+*.pid.lock
+tmp/
+temp/
+.tmp/
+
+# Test and build output
+coverage/
+dist/
+build/
+.cache/
+.turbo/
+
+# Operating-system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# Editor settings
+.idea/
+.vscode/

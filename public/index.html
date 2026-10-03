@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 리셋권 확인</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">CODEX · RESET CREDITS</div>
+      <h1>리셋권, 언제까지<br class="mobile-break"> 사용할 수 있나요?</h1>
+      <p class="intro">지급 시각부터 만료까지, 한국 시간으로 확인하세요.</p>
+    </header>
+    <section class="toolbar" aria-label="조회 상태">
+      <span id="connection" class="connection">연결 확인 중</span>
+      <button id="refresh" type="button">새로고침 <span aria-hidden="true">↻</span></button>
+    </section>
+    <div id="notice" class="notice" role="status" aria-live="polite">Codex 계정에 연결하고 있습니다.</div>
+    <section class="summary" aria-label="리셋권 요약">
+      <div class="balance"><p class="label">사용 가능한 리셋권</p><div><strong id="count">—</strong><span class="unit">개</span></div></div>
+      <div class="next-expiry"><p class="label">조회된 리셋권 중 가장 가까운 만료</p><p id="nearest">아직 조회하지 않았습니다.</p><p id="nearest-remaining" class="muted"></p></div>
+    </section>
+    <section class="details" aria-labelledby="details-title">
+      <div class="section-title"><h2 id="details-title">리셋권 상세</h2><span>KST · UTC+09:00</span></div>
+      <p id="coverage" class="muted">조회 후 상세 정보를 표시합니다.</p>
+      <div id="credits"></div>
+    </section>
+    <footer>
+      <p>마지막 조회 <span id="queried-at">—</span></p>
+      <p>남은 시간은 PC 시계 기준입니다. 최신 상태는 새로고침으로 확인하세요.</p>
+      <p class="privacy">개인 PC에서 실행 · 인증 정보는 화면에 표시하지 않습니다.</p>
+    </footer>
+  </main>
+</body>
+</html>

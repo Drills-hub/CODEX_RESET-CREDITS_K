@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createApplication } from '../lib/http.mjs';
+import { AppError } from '../lib/errors.mjs';
+
+async function setup(t, service) {
+  const app = createApplication({ service: service ?? {
+    status: async () => ({ connected: true, authState: 'chatgpt', revision: 0, busy: false }),
+    read: async () => ({ queriedAt: 0, availableCount: 0, detailState: 'complete', credits: [], revision: 0 }),
+  } });
+  await app.listen(0);
+  t.after(() => app.close());
+  const url = app.origin;
+  const response = await fetch(`${url}/api/session`, { method: 'POST', headers: { Origin: url, 'Content-Type': 'application/json', 'X-Reset-Check': '1' }, body: JSON.stringify({ token: app.bootstrapToken }) });
+  const cookie = response.headers.get('set-cookie')?.split(';')[0];
+  return { app, url, response, cookie, headers: { Origin: url, Cookie: cookie, 'X-Reset-Check': '1', 'Content-Type': 'application/json' } };
+}
+test('bootstrap requires a single-use token and sets a private session cookie', async t => {
+  const { app, url, response } = await setup(t);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('set-cookie'), /HttpOnly/);
+  assert.match(response.headers.get('set-cookie'), /SameSite=Strict/);
+  const again = await fetch(`${url}/api/session`, { method: 'POST', headers: { Origin: url, 'X-Reset-Check': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: app.bootstrapToken }) });
+  assert.equal(again.status, 403);
+});
+test('blocks unauthenticated and cross-origin API reads', async t => {
+  const { url, headers } = await setup(t);
+  assert.equal((await fetch(`${url}/api/status`)).status, 403);
+  assert.equal((await fetch(`${url}/api/status`, { headers })).status, 200);
+  for (const invalid of [{ Origin: 'https://evil.example' }, { Origin: 'null' }, { 'X-Reset-Check': '' }]) {
+    assert.equal((await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers: { ...headers, ...invalid }, body: '{}' })).status, 403);
+  }
+  assert.equal((await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers: { ...headers, Origin: '' }, body: '{}' })).status, 403);
+  const preflight = await fetch(`${url}/api/reset-credits/read`, { method: 'OPTIONS', headers: { Origin: 'https://evil.example' } });
+  assert.equal(preflight.status, 403);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), null);
+});
+test('rejects wrong Host, including DNS rebinding', async t => {
+  const { url } = await setup(t);
+  const result = await new Promise(resolve => {
+    http.get(url, { headers: { Host: 'evil.example' } }, res => { res.resume(); resolve(res.statusCode); });
+  });
+  assert.equal(result, 403);
+});
+test('read endpoint returns no-store snapshots and rejects arbitrary bodies/RPC routes', async t => {
+  const { url, headers } = await setup(t);
+  const response = await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers, body: '{}' });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal((await response.json()).availableCount, 0);
+  assert.equal((await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers, body: '{"method":"account/rateLimitResetCredit/consume"}' })).status, 400);
+  assert.equal((await fetch(`${url}/api/rpc`, { method: 'POST', headers, body: '{}' })).status, 404);
+  assert.equal((await fetch(`${url}/api/reset-credits/read`, { method: 'GET', headers })).status, 405);
+});
+test('static assets apply CSP and never expose project or auth files', async t => {
+  const { url } = await setup(t);
+  const page = await fetch(url);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-security-policy'), /default-src 'self'/);
+  assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  for (const path of ['/package.json', '/.codex/auth.json', '/lib/codex.mjs', '/missing']) {
+    assert.equal((await fetch(`${url}${path}`)).status, 404);
+  }
+});
+test('unrecognized upstream errors never expose their raw text', async t => {
+  const { url, headers } = await setup(t, { status: async () => ({}), read: async () => { throw new Error('SECRET_TOKEN SECRET_EMAIL'); } });
+  const response = await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers, body: '{}' });
+  assert.equal(response.status, 502);
+  assert.doesNotMatch(await response.text(), /SECRET/);
+});
+test('auth failures are actionable and rate timeout does not erase old data', async t => {
+  const { url, headers } = await setup(t, { status: async () => ({}), read: async () => { throw new AppError('LOGIN_REQUIRED'); } });
+  const response = await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers, body: '{}' });
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).clearPrevious, true);
+});
