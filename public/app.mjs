@@ -87,6 +87,9 @@ function dispatch(event) {
     pendingAnnouncements.delete('query');
     announceStatus('account', `${state.revision}:${state.authState}`, '계정 상태가 변경되어 이전 사용량 결과를 지웠습니다.');
   } else if (event.type === 'success' && state.snapshot === event.snapshot) {
+    if (previousSnapshot && (previousSnapshot.revision !== state.snapshot.revision || previousSnapshot.accountScope !== state.snapshot.accountScope)) {
+      announceStatus('account', `${state.snapshot.accountScope}:${state.revision}:${state.authState}`, '계정 상태가 변경되어 이전 사용량 결과를 지우고 현재 계정 정보를 확인했습니다.');
+    }
     const balance = kind => {
       const value = state.snapshot.usageWindows?.find(row => row.kind === kind)?.remainingPercent;
       return Number.isInteger(value) && value >= 0 && value <= 100 ? `${value}%` : '확인 불가';

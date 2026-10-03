@@ -677,6 +677,22 @@ test('an enabled expiry reminder shows delivery errors in both visible and live 
   assert.equal(await page.locator('#notifications-toggle').getAttribute('aria-pressed'), 'true');
 });
 
+test('a successful read replacing the account announces that boundary once', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000);
+  const page = await openApp(t, { read: n => ({ ...longSnapshot, queriedAt: at, revision: n === 1 ? 0 : 1,
+    accountScope: n === 1 ? 'scope-a' : 'scope-b', ordinaryUsageAllowed: true, usageWindows: [
+      { ...longSnapshot.usageWindows[0], remainingPercent: n === 1 ? 65 : 30, usedPercent: n === 1 ? 35 : 70 },
+      { ...longSnapshot.usageWindows[1], remainingPercent: 50, usedPercent: 50 },
+    ],
+  }) });
+  await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.match(await page.locator('#usage-announcement').textContent(), /계정 상태가 변경.*조회 완료.*30%/);
+  assert.doesNotMatch(await page.locator('#usage-announcement').textContent(), /scope-a|scope-b/);
+  await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.doesNotMatch(await page.locator('#usage-announcement').textContent(), /계정 상태가 변경/);
+});
+
 test('empty, count-only, unavailable, refresh failure, and login-needed states render without overflow', async t => {
   if (skipWithoutBrowser(t)) return;
   const cases = [
