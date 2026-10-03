@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createApplication } from '../lib/http.mjs';
 import { AppError } from '../lib/errors.mjs';
+import { CreditService } from '../lib/service.mjs';
+import { EventEmitter } from 'node:events';
 
 async function setup(t, service) {
   const app = createApplication({ service: service ?? {
@@ -68,6 +70,21 @@ test('unrecognized upstream errors never expose their raw text', async t => {
   const response = await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers, body: '{}' });
   assert.equal(response.status, 502);
   assert.doesNotMatch(await response.text(), /SECRET/);
+});
+test('incompatible RPC results return only the sanitized error through service and HTTP', async t => {
+  const client = new EventEmitter();
+  client.request = async method => method === 'account/read'
+    ? { requiresOpenaiAuth: true, account: { type: 'chatgpt', email: 'PRIVATE_EMAIL' } }
+    : { rateLimits: {}, rateLimitResetCredits: ['PRIVATE_PAYLOAD'] };
+  const { url, headers } = await setup(t, new CreditService(client));
+  const response = await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers, body: '{}' });
+  assert.equal(response.status, 502);
+  const payload = await response.json();
+  assert.equal(payload.code, 'INCOMPATIBLE');
+  assert.match(payload.message, /Codex CLI.*최신 버전으로 업데이트/);
+  assert.equal(payload.clearPrevious, false);
+  assert.deepEqual(Object.keys(payload).sort(), ['clearPrevious', 'code', 'message']);
+  assert.doesNotMatch(JSON.stringify(payload), /PRIVATE_EMAIL|PRIVATE_PAYLOAD/);
 });
 test('auth failures are actionable and rate timeout does not erase old data', async t => {
   const { url, headers } = await setup(t, { status: async () => ({}), read: async () => { throw new AppError('LOGIN_REQUIRED'); } });

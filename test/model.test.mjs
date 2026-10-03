@@ -13,18 +13,26 @@ test('countdown uses the local clock and never becomes negative', () => {
   assert.equal(remainingTime(100, 100000), '만료 시각 경과 — 새로고침 필요');
 });
 test('summary unavailable differs from zero and count-only data', () => {
-  assert.equal(normalizeCredits({}, 0).detailState, 'unavailable');
-  assert.equal(normalizeCredits({ rateLimitResetCredits: null }, 0).availableCount, null);
-  const zero = normalizeCredits({ rateLimitResetCredits: { availableCount: 0, credits: [] } }, 0);
+  assert.equal(normalizeCredits({ rateLimits: {} }, 0).detailState, 'unavailable');
+  assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: null }, 0).availableCount, null);
+  const zero = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 0, credits: [] } }, 0);
   assert.match(emptyMessage(zero), /없습니다/);
-  const only = normalizeCredits({ rateLimitResetCredits: { availableCount: 3, credits: null } }, 0);
+  const only = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 3, credits: null } }, 0);
   assert.equal(only.detailState, 'count-only');
   assert.equal(only.availableCount, 3);
   assert.match(emptyMessage(only), /상세 정보 미제공/);
 });
+test('required rate-limit envelope is validated while optional reset details remain unavailable', () => {
+  for (const result of [{}, { rateLimits: null }, { rateLimits: [] }, { rateLimits: 'bad' }]) {
+    assert.throws(() => normalizeCredits(result), error => error.code === 'INCOMPATIBLE');
+  }
+  assert.equal(normalizeCredits({ rateLimits: {} }).detailState, 'unavailable');
+  assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: null }).detailState, 'unavailable');
+});
 test('sorts known expirations first, preserves null versus missing, strips sensitive fields', () => {
   const snapshot = normalizeCredits({
     accountId: 'SECRET_ACCOUNT', accessToken: 'SECRET_TOKEN',
+    rateLimits: {},
     rateLimitResetCredits: { availableCount: 5, credits: [
       { id: 'SECRET_CREDIT', title: '<img src=x onerror=alert(1)>', status: 'available', grantedAt: 10, expiresAt: 500 },
       { id: 'x', status: 'available', grantedAt: 10, expiresAt: null },
@@ -40,7 +48,7 @@ test('sorts known expirations first, preserves null versus missing, strips sensi
   assert.doesNotMatch(JSON.stringify(snapshot), /SECRET/);
 });
 test('invalid timestamps and unknown statuses fail safely', () => {
-  const s = normalizeCredits({ rateLimitResetCredits: { availableCount: 2, credits: [
+  const s = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 2, credits: [
     { grantedAt: '100', expiresAt: '500', status: 'surprise' },
     { grantedAt: 0, expiresAt: 1e20, status: 'redeemed' },
   ] } }, 0);
@@ -48,5 +56,5 @@ test('invalid timestamps and unknown statuses fail safely', () => {
   assert.equal(s.credits[0].expiryState, 'unknown');
   assert.equal(s.credits[0].status, 'unknown');
   assert.equal(s.credits[1].expiryState, 'unknown');
-  assert.throws(() => normalizeCredits({ rateLimitResetCredits: { availableCount: -1 } }, 0));
+  assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: -1 } }, 0), error => error.code === 'INCOMPATIBLE');
 });

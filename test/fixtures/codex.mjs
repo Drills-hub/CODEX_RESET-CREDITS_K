@@ -21,7 +21,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   else if (!initialized) send({ id: msg.id, error: { code: -32600, message: 'Not initialized' } });
   else if (msg.method === 'account/read') {
     accountReads++;
-    send({ id: msg.id, result: { account: mode === 'logged-out' ? null : { type: mode === 'api-key' ? 'apiKey' : 'chatgpt', email: mode === 'switch-then-timeout' && accountReads >= 3 ? 'SECRET_OTHER_EMAIL' : 'SECRET_EMAIL', accountId: 'SECRET_ACCOUNT' } } });
+    send({ id: msg.id, result: { requiresOpenaiAuth: true, account: mode === 'logged-out' ? null : { type: mode === 'api-key' ? 'apiKey' : 'chatgpt', email: mode === 'switch-then-timeout' && accountReads >= 3 ? 'SECRET_OTHER_EMAIL' : 'SECRET_EMAIL', accountId: 'SECRET_ACCOUNT' } } });
   }
   else if (msg.method === 'account/rateLimits/read') {
     usageReads++;
@@ -31,7 +31,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     else if (mode === 'rate-timeout') continue;
     else if (mode === 'account-change') {
       send({ method: 'account/updated', params: { authMode: null } });
-      send({ id: msg.id, result: { rateLimitResetCredits: { availableCount: 1, credits: [] } } });
-    } else send({ id: msg.id, result: { rateLimitResetCredits: { availableCount: 1, credits: [{ id: 'SECRET_CREDIT', status: 'available', grantedAt: 0, expiresAt: 1784246400, title: 'Full reset' }] } } });
+      send({ id: msg.id, result: { rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [] } } });
+    } else send({ id: msg.id, result: { rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [{ id: 'SECRET_CREDIT', status: 'available', grantedAt: 0, expiresAt: 1784246400, title: 'Full reset' }] } } });
   } else send({ id: msg.id, error: { code: -32601, message: 'Forbidden method' } });
 }

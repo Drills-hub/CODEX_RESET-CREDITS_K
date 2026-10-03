@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { CodexClient, DISCOVERY_BUDGET_MS, resolveCodexCommand, runDiscoveryCommand, terminateProcessTree } from '../lib/codex.mjs';
 import { CreditService } from '../lib/service.mjs';
+import { normalizeCredits } from '../lib/credits.mjs';
 const fixture = fileURLToPath(new URL('./fixtures/codex.mjs', import.meta.url));
 function make(t, mode = 'normal', timeoutMs = 1000) {
   const client = new CodexClient({ command: process.execPath, args: [fixture, mode], timeoutMs });
@@ -21,6 +22,54 @@ test('real stdio handshake queries credits without returning account identity', 
   assert.equal(s.credits[0].expiresAt, 1784246400);
   assert.doesNotMatch(JSON.stringify(s), /SECRET/);
   assert.equal((await service.status()).authState, 'chatgpt');
+});
+test('malformed rate-limit response envelopes and field types are incompatible', () => {
+  for (const result of [null, undefined, [], 'bad', 1, false]) {
+    assert.throws(() => normalizeCredits(result), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const summary of [[], 'bad', 1, false]) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: summary }), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const availableCount of [undefined, null, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1']) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount } }), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const credits of ['', 0, {}, true]) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits } }), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const row of [null, [], new Date(0), Object.assign(Object.create({ inherited: true }), { title: 'bad' })]) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [row] } }), error => error.code === 'INCOMPATIBLE');
+  }
+  assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 10001, credits: Array(10001).fill({}) } }), error => error.code === 'INVALID_DATA');
+});
+test('normalization preserves unavailable, count-only, unknown timestamps/status, null expiry, and ignores extra fields', () => {
+  assert.equal(normalizeCredits({ rateLimits: {} }).detailState, 'unavailable');
+  assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: null }).availableCount, null);
+  assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 2 } }).detailState, 'count-only');
+  assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: null } }).detailState, 'count-only');
+  const result = normalizeCredits({ ignored: 'secret', rateLimits: {}, rateLimitResetCredits: { availableCount: 1, extra: 'ignored', credits: [{ status: 'future-status', expiresAt: null, grantedAt: 'bad', secret: 'ignored' }] } }, 1000);
+  assert.deepEqual(result.credits, [{ number: 1, title: '리셋권', status: 'unknown', grantedAt: null, expiresAt: null, expiryState: 'none' }]);
+  const invalidTimes = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [{ expiresAt: 'bad', grantedAt: -1 }] } });
+  assert.equal(invalidTimes.credits[0].expiryState, 'unknown');
+  assert.equal(invalidTimes.credits[0].grantedAt, null);
+});
+test('account read validates its required auth flag and optional account field', async t => {
+  for (const response of [null, [], 'bad', {}, { account: null }, { requiresOpenaiAuth: 'yes', account: null }, Object.create({ requiresOpenaiAuth: true })]) {
+    const client = { on() {}, request: async () => response };
+    const service = new CreditService(client);
+    await assert.rejects(service.status(), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const account of [[], 'bad', 1, {}]) {
+    const client = { on() {}, request: async () => ({ requiresOpenaiAuth: true, account }) };
+    await assert.rejects(new CreditService(client).status(), error => error.code === 'INCOMPATIBLE');
+  }
+  const arrayResponse = [];
+  arrayResponse.requiresOpenaiAuth = true;
+  arrayResponse.account = { type: 'chatgpt' };
+  await assert.rejects(new CreditService({ on() {}, request: async () => arrayResponse }).status(), error => error.code === 'INCOMPATIBLE');
+  const missingOptionalAccount = { on() {}, request: async () => ({ requiresOpenaiAuth: true }) };
+  assert.equal((await new CreditService(missingOptionalAccount).status()).authState, 'unsupported');
+  const client = { on() {}, request: async () => ({ requiresOpenaiAuth: true, account: null }) };
+  assert.equal((await new CreditService(client).status()).authState, 'signed-out');
 });
 for (const [mode, code] of [['logged-out', 'LOGIN_REQUIRED'], ['api-key', 'AUTH_UNSUPPORTED'], ['rpc-error', 'INCOMPATIBLE'], ['unauthorized', 'LOGIN_REQUIRED'], ['timeout', 'TIMEOUT'], ['disconnect', 'DISCONNECTED'], ['rate-timeout', 'TIMEOUT'], ['account-change', 'ACCOUNT_CHANGED']]) {
   test(`sanitizes ${mode} failures`, async t => {
