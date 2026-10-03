@@ -5,7 +5,7 @@ const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <=
 const percent = value => Number.isInteger(value) && value >= 0 && value <= 100;
 
 // Only compare reset times from this read. Future balances and permission stay unknown.
-export function compareStartTimes(snapshot, { now = Date.now(), stale = false } = {}) {
+export function compareStartTimes(snapshot, { now = Date.now(), stale = false, refreshing = false } = {}) {
   const queriedAt = timestamp(snapshot?.queriedAt) ? snapshot.queriedAt : null;
   const restriction = snapshot?.ordinaryUsageAllowed === false ? ' 마지막 조회에서 서버가 일반 사용을 제한했습니다.' : '';
   function suspended(state, message) {
@@ -14,6 +14,7 @@ export function compareStartTimes(snapshot, { now = Date.now(), stale = false } 
     })) };
   }
   if (!snapshot) return suspended('not-ready', '조회 후 작업 시작 시각을 비교합니다.');
+  if (refreshing) return suspended('refreshing', '재조회 중 — 마지막 성공 결과를 갱신하고 있습니다.');
   if (stale || !Number.isFinite(now) || now < 0 || !timestamp(Math.floor(now / 1000)) || queriedAt === null || queriedAt * 1000 > now) {
     return suspended('refresh-needed', '최신 사용량을 재조회한 뒤 시작 시각을 비교해 주세요.');
   }

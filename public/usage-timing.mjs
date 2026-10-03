@@ -3,9 +3,13 @@ function result(code, title, reason, targetAt = null) {
 }
 
 // Recommendations use the last successful read, never a predicted refill.
-export function recommendUsage(snapshot, { now = Date.now(), stale = false } = {}) {
+export function recommendUsage(snapshot, { now = Date.now(), stale = false, refreshing = false } = {}) {
   if (!snapshot) return result('not-ready', '조회 후 사용 시점을 안내합니다.', '5시간·주간 한도를 조회해 주세요.');
-  if (stale || !Number.isFinite(now)) return result('refresh-needed', '최신 사용량 재조회가 필요합니다.', '이전 조회 값으로 사용 시점을 추천하지 않습니다. 새로고침해 주세요.');
+  if (refreshing) return result('refreshing', '사용량 재조회 중입니다.', '마지막 성공 결과를 갱신하고 있습니다. 조회가 끝난 뒤 사용 시점을 확인해 주세요.');
+  if (stale || !Number.isFinite(now) || now < 0 || !Number.isSafeInteger(snapshot.queriedAt)
+    || snapshot.queriedAt < 0 || snapshot.queriedAt * 1000 > now) {
+    return result('refresh-needed', '최신 사용량 재조회가 필요합니다.', '이전 조회 값으로 사용 시점을 추천하지 않습니다. 새로고침해 주세요.');
+  }
   if (snapshot.ordinaryUsageAllowed === false) return result('server-restricted', '서버에서 일반 사용을 제한했습니다.', '잔여율만으로 사용 가능 여부를 판단할 수 없습니다. 최신 상태를 재조회해 주세요.');
   const windows = ['five-hour', 'weekly'].map(kind => snapshot.usageWindows?.find(row => row.kind === kind));
   if (windows.some(row => !row || row.state !== 'complete' || !Number.isInteger(row.remainingPercent)

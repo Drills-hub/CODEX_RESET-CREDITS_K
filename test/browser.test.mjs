@@ -208,6 +208,7 @@ test('timing recommendation shows its reason and query time and stays paused aft
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.doesNotMatch(await page.locator('#recommendation').innerText(), /잔여량을 활용하기 위한 권고/);
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#recommendation')?.dataset.code === 'weekly-reset');
 });
@@ -222,6 +223,7 @@ test('timing recommendation becomes requery guidance when a reset passes', async
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'weekly-budget');
   await page.clock.fastForward(61000);
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.doesNotMatch(await page.locator('#recommendation').innerText(), /잔여량을 활용하기 위한 권고/);
 });
 
 test('usage alert opt-in validates low allowance, persists, and avoids reload duplicates', async t => {
@@ -383,11 +385,40 @@ test('comparison requires fresh reset times at the reset boundary instead of adv
   assert.equal(reads, 1);
 });
 
+test('delayed refresh suspends usage decisions while retaining the last dashboard values', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let release;
+  const page = await openApp(t, { read: n => n === 1 ? structuredClone(longSnapshot) : new Promise(resolve => { release = () => resolve(structuredClone(longSnapshot)); }) });
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.body.dataset.loading === 'true');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refreshing');
+  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'refreshing');
+  assert.doesNotMatch(await page.locator('#recommendation').innerText(), /지금 사용 가능합니다|활용을 권장|잔여량을 활용하기 위한 권고/);
+  assert.match(await page.locator('#usage-status').innerText(), /재조회 중.*마지막 성공 결과/);
+  release();
+  await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.notEqual(await page.locator('#recommendation').getAttribute('data-code'), 'refreshing');
+  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'complete');
+});
+
 test('waits for delayed session exchange and the initial credit read', async t => {
   if (skipWithoutBrowser(t)) return;
   const page = await openApp(t, { sessionDelayMs: 500 });
   assert.equal(await page.locator('#count').innerText(), '5');
   assert.equal(await page.locator('.credit').count(), 1);
+});
+
+test('initial markup stays neutral while the session exchange is pending', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext(); t.after(() => context.close());
+  await context.addInitScript(() => addEventListener('DOMContentLoaded', () => {
+    globalThis.__initialRecommendationDisclaimer = document.querySelector('#recommendation-disclaimer')?.textContent;
+  }));
+  const page = await openApp(t, { context, sessionDelayMs: 500 });
+  const initial = await page.evaluate(() => __initialRecommendationDisclaimer);
+  assert.doesNotMatch(initial, /잔여량을 활용하기 위한 권고/);
+  assert.match(initial, /조회.*안내/);
 });
 
 test('empty, count-only, unavailable, refresh failure, and login-needed states render without overflow', async t => {

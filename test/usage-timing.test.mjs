@@ -85,3 +85,11 @@ test('failed reads keep recommendations suspended even when reset times are in t
   assert.equal(recommendUsage(value, { now: at * 1000, stale: true }).code, 'refresh-needed');
   assert.equal(recommendUsage(value, { now: at * 1000, stale: false }).code, 'ready');
 });
+
+test('refreshing and a local clock before the query time suspend recommendations', () => {
+  const value = snapshot();
+  assert.equal(recommendUsage(value, { now: at * 1000, refreshing: true }).code, 'refreshing');
+  assert.equal(recommendUsage(value, { now: (at - 60) * 1000 }).code, 'refresh-needed');
+  assert.equal(recommendUsage({ ...value, queriedAt: -1 }, { now: at * 1000 }).code, 'refresh-needed');
+  assert.doesNotMatch(recommendUsage(value, { now: at * 1000, refreshing: true }).title, /사용 가능|활용/);
+});

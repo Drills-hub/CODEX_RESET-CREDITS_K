@@ -6,7 +6,7 @@ import { createUsageAlertController } from './usage-alerts.mjs';
 import { createUsageForecastController } from './usage-forecast.mjs';
 import { compareStartTimes } from './start-time-comparison.mjs';
 
-const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at', 'usage-alerts-toggle', 'usage-alerts-status'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['connection', 'refresh', 'notice', 'count', 'nearest', 'nearest-remaining', 'coverage', 'credits', 'queried-at', 'notifications-toggle', 'notifications-status', 'usage-status', 'recommendation', 'recommendation-title', 'recommendation-reason', 'recommendation-target', 'recommendation-remaining', 'recommendation-queried-at', 'recommendation-disclaimer', 'usage-alerts-toggle', 'usage-alerts-status'].map(id => [id, document.getElementById(id)]));
 const usageElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`usage-${kind}`) }));
 const forecastElements = ['five-hour', 'weekly'].map(kind => ({ kind, element: document.getElementById(`forecast-${kind}`) }));
 const forecastToggle = document.getElementById('forecast-toggle');
@@ -140,6 +140,7 @@ function renderUsage(snapshot) {
       : hasReset ? remainingTime(row.resetsAt, now) : '리셋 시각 확인 불가';
   }
   elements['usage-status'].textContent = !snapshot ? '조회 후 사용 한도를 표시합니다.'
+    : state.loading ? '재조회 중 — 아래 값은 마지막 성공 결과입니다.'
     : state.usageStale ? '이전 조회 결과입니다. 최신 사용량을 재조회해 주세요.'
     : resetPassed ? '리셋 시각이 지났습니다. 최신 사용량을 재조회해 주세요.'
     : snapshot.usageWindows?.every(row => row.state === 'complete') ? '마지막 조회 기준 잔여율입니다. 실제 사용 가능 여부는 서버 상태에 따라 달라집니다.'
@@ -147,13 +148,17 @@ function renderUsage(snapshot) {
   if (snapshot?.ordinaryUsageAllowed === false) elements['usage-status'].textContent += ' 마지막 조회에서 서버가 일반 사용을 제한했습니다.';
 }
 function renderRecommendation(snapshot) {
-  const recommendation = recommendUsage(snapshot, { stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
+  const recommendation = recommendUsage(snapshot, { refreshing: state.loading, stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
   elements.recommendation.dataset.code = recommendation.code;
   elements['recommendation-title'].textContent = recommendation.title;
   elements['recommendation-reason'].textContent = recommendation.reason;
   elements['recommendation-target'].textContent = recommendation.targetAt === null ? '—' : formatKst(recommendation.targetAt);
   elements['recommendation-remaining'].textContent = recommendation.targetAt === null ? '' : remainingTime(recommendation.targetAt);
   elements['recommendation-queried-at'].textContent = snapshot ? formatKst(snapshot.queriedAt) : '—';
+  const actionable = ['ready', 'weekly-budget', 'weekly-reset', 'five-hour-reset'].includes(recommendation.code);
+  elements['recommendation-disclaimer'].textContent = actionable
+    ? '잔여량을 활용하기 위한 권고이며, 작업 횟수나 사용 가능 시간을 보장하지 않습니다.'
+    : '최신 상태를 확인한 뒤 사용 시점을 다시 안내합니다.';
 }
 function renderForecast() {
   const enabled = forecast?.enabled ?? false;
@@ -179,14 +184,14 @@ function renderForecast() {
   }
 }
 function renderComparison() {
-  const comparison = compareStartTimes(state.snapshot, { stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
+  const comparison = compareStartTimes(state.snapshot, { refreshing: state.loading, stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
   const names = { 'five-hour': '5시간', weekly: '주간' };
   comparisonRoot.dataset.state = comparison.state;
   comparisonStatus.textContent = comparison.message;
   comparisonQueriedAt.textContent = comparison.queriedAt === null ? '—' : formatKst(comparison.queriedAt);
   for (const { key, element } of comparisonElements) {
     const row = comparison.rows.find(row => row.key === key);
-    const suspended = ['not-ready', 'refresh-needed'].includes(row.state);
+    const suspended = ['not-ready', 'refresh-needed', 'refreshing'].includes(row.state);
     element.dataset.state = row.state;
     element.querySelector('.comparison-time').textContent = row.startAt === null ? '—' : formatKst(row.startAt);
     element.querySelector('.comparison-wait').textContent = row.startAt === null ? '' : key === 'now' ? '지금' : remainingTime(row.startAt);

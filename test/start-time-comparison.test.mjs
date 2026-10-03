@@ -94,3 +94,11 @@ test('invalid local clock or a query timestamp ahead of it cannot yield a compar
   assert.equal(compareStartTimes(snapshot(), { now: NaN }).state, 'refresh-needed');
   assert.equal(compareStartTimes(snapshot(), { now: (at - 1) * 1000 }).state, 'refresh-needed');
 });
+
+test('refreshing preserves the query timestamp but suspends every decision row', () => {
+  const result = compareStartTimes(snapshot(), { now: at * 1000, refreshing: true });
+  assert.equal(result.state, 'refreshing');
+  assert.equal(result.queriedAt, at);
+  assert.ok(result.rows.every(row => row.state === 'refreshing' && row.startAt === null && row.resetKinds.length === 0));
+  assert.ok(result.rows.every(row => !/사용 가능|활용 권장/.test(row.message)));
+});
