@@ -483,6 +483,55 @@ test('manual refresh and another tab alert validation share one usage read', asy
   assert.equal(reads - before, 1);
 });
 
+test('BFCache transitions preserve forecasts while real page exit clears them', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = Math.floor(Date.now() / 1000); let reads = 0;
+  const page = await openApp(t, { clockTime: at * 1000, read: () => {
+    const index = reads++;
+    return { ...longSnapshot, queriedAt: at + Math.min(index, 2) * 300, accountScope: 'bfcache-scope', usageWindows: [
+      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - index * 10, resetsAt: at + 18000 },
+    ] };
+  } });
+  await page.locator('#forecast-toggle').click();
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
+  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  assert.equal(await page.locator('#forecast-toggle').innerText(), '추세 끄기');
+  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /3건/);
+  const before = reads;
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  await page.waitForFunction(() => document.body.dataset.loading === 'false' && document.querySelector('#notice').dataset.kind === 'info');
+  assert.equal(reads, before + 1);
+  assert.equal(await page.locator('#forecast-toggle').innerText(), '추세 끄기');
+  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /3건/);
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })));
+  assert.equal(await page.locator('#forecast-toggle').innerText(), '추세 켜기');
+  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /0건/);
+});
+
+test('BFCache restoration discards the prior in-flight response and performs a fresh read', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let reads = 0; let release;
+  const page = await openApp(t, { read: () => {
+    reads++;
+    if (reads === 2) return new Promise(resolve => { release = () => resolve({ ...longSnapshot, usageWindows: [
+      { ...longSnapshot.usageWindows[0], remainingPercent: 1 }, longSnapshot.usageWindows[1],
+    ] }); });
+    return structuredClone(longSnapshot);
+  } });
+  await page.locator('#refresh').click();
+  for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(release);
+  await page.evaluate(() => {
+    dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  release();
+  await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.equal(reads, 3);
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
+});
+
 test('empty, count-only, unavailable, refresh failure, and login-needed states render without overflow', async t => {
   if (skipWithoutBrowser(t)) return;
   const cases = [

@@ -11,14 +11,14 @@ function snapshotPayload(value) {
   return result;
 }
 function errorPayload(error) {
-  const codes = ['CONNECTION', 'TIMEOUT', 'BUSY', 'LOGIN_REQUIRED', 'AUTH_UNSUPPORTED', 'ACCOUNT_CHANGED', 'INCOMPATIBLE', 'UPSTREAM', 'INVALID_DATA', 'FORBIDDEN'];
+  const codes = ['CONNECTION', 'TIMEOUT', 'BUSY', 'LOGIN_REQUIRED', 'AUTH_UNSUPPORTED', 'ACCOUNT_CHANGED', 'INCOMPATIBLE', 'UPSTREAM', 'INVALID_DATA', 'FORBIDDEN', 'CLI_MISSING', 'DISCONNECTED', 'BAD_REQUEST'];
   if (!codes.includes(error?.code) || typeof error.message !== 'string') return connectionError();
   return { code: error.code, message: error.message, clearPrevious: error.clearPrevious === true };
 }
 
 export function createUsageReadCoordinator({ locks, BroadcastChannel, read, timeoutMs = 18000,
   setTimeout: schedule = globalThis.setTimeout, clearTimeout: cancel = globalThis.clearTimeout } = {}) {
-  let channel; let active; let closed = false; let lastResult;
+  let channel; let active; let closed = false;
   try { if (locks?.request && BroadcastChannel) channel = new BroadcastChannel(channelName); } catch {}
   const post = data => { try { channel?.postMessage(data); } catch {} };
   function finish(operation, packet) {
@@ -35,16 +35,16 @@ export function createUsageReadCoordinator({ locks, BroadcastChannel, read, time
     if (closed || !data || typeof data.id !== 'string') return;
     if (data.type === 'request') {
       if (active && !active.done) active.participants.add(data.id);
-      else if (lastResult && Number.isFinite(data.startedAt) && data.startedAt <= lastResult.finishedAt) {
-        post({ ...lastResult, targets: [data.id] });
-      }
     } else if (data.type === 'result' && Array.isArray(data.targets) && active && data.targets.includes(active.id)) {
       finish(active, data);
     }
   };
   async function perform(operation) {
     if (closed || operation.done) return;
-    operation.leader = true;
+    if (channel) {
+      cancel(operation.timer);
+      operation.timer = schedule(() => finish(operation, { ok: false, error: timeoutError() }), timeoutMs);
+    }
     // Let queued join messages arrive before a fast read can finish.
     if (channel) await new Promise(resolve => { operation.delayResolve = resolve; operation.delayTimer = schedule(resolve, 0); });
     if (closed || operation.done) return;
@@ -61,28 +61,27 @@ export function createUsageReadCoordinator({ locks, BroadcastChannel, read, time
       packet = { ok: true, value: snapshotPayload(value) };
     } catch (error) { packet = { ok: false, error: errorPayload(error) }; }
     if (closed || operation.done) return;
-    lastResult = { ...packet, type: 'result', id: operation.id, finishedAt: Date.now(), targets: [...operation.participants] };
-    post(lastResult);
+    post({ ...packet, type: 'result', id: operation.id, targets: [...operation.participants] });
     finish(operation, packet);
   }
   function run() {
     if (closed) return Promise.reject(connectionError());
     if (active) return active.promise;
-    const operation = { id: globalThis.crypto.randomUUID(), startedAt: Date.now(), participants: new Set(), done: false };
+    const operation = { id: globalThis.crypto.randomUUID(), participants: new Set(), done: false };
     operation.participants.add(operation.id);
     const promise = new Promise((resolve, reject) => { operation.resolve = resolve; operation.reject = reject; });
     operation.promise = promise.finally(() => { if (active === operation) active = undefined; });
     active = operation;
     if (channel) operation.timer = schedule(() => finish(operation, { ok: false, error: timeoutError() }), timeoutMs);
-    post({ type: 'request', id: operation.id, startedAt: operation.startedAt });
+    post({ type: 'request', id: operation.id });
     const work = locks?.request ? locks.request(lockName, channel ? { mode: 'exclusive', ifAvailable: true } : { mode: 'exclusive' },
-      lock => lock ? perform(operation) : undefined) : perform(operation);
+      lock => lock ? perform(operation) : locks.request(lockName, { mode: 'exclusive' }, () => perform(operation))) : perform(operation);
     Promise.resolve(work).catch(error => finish(operation, { ok: false, error: errorPayload(error) }));
     return operation.promise;
   }
   return { run, close() {
     if (closed) return;
-    closed = true; lastResult = undefined;
+    closed = true;
     if (active) finish(active, { ok: false, error: connectionError() });
     channel?.close();
   } };

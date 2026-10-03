@@ -51,6 +51,14 @@ test('a sanitized failure is shared without leaking arbitrary error fields', asy
   first.close(); second.close();
 });
 
+test('sanitized CLI and disconnection errors keep their actionable codes', async () => {
+  for (const code of ['CLI_MISSING', 'DISCONNECTED', 'BAD_REQUEST']) {
+    const coordinator = createUsageReadCoordinator({ read: async () => { throw { code, message: '정제된 오류 안내', clearPrevious: false }; } });
+    await assert.rejects(coordinator.run(), error => error.code === code);
+    coordinator.close();
+  }
+});
+
 test('locks without a channel serialize reads and avoid BUSY overlap', async () => {
   const locks = locksHarness(); let active = 0; let reads = 0;
   const read = async () => { reads++; active++; assert.equal(active, 1); await new Promise(resolve => setImmediate(resolve)); active--; return snapshot; };
@@ -92,7 +100,7 @@ test('closing a leader during its join delay releases the read lock', async () =
 
 test('a stalled leader times out waiters and later unrelated results are ignored', async () => {
   const BroadcastChannel = broadcastHarness();
-  const controller = createUsageReadCoordinator({ BroadcastChannel, locks: { request: async (name, options, fn) => fn(null) }, timeoutMs: 5, read: async () => snapshot });
+  const controller = createUsageReadCoordinator({ BroadcastChannel, locks: { request: (name, options, fn) => options.ifAvailable ? fn(null) : new Promise(() => {}) }, timeoutMs: 5, read: async () => snapshot });
   await assert.rejects(controller.run(), error => error.code === 'TIMEOUT');
   controller.close();
 });
@@ -116,4 +124,16 @@ test('exclusive fallback does not count queue time as a broadcast response timeo
   const results = await Promise.allSettled([a.run(), b.run()]);
   assert.ok(results.every(result => result.status === 'fulfilled'), JSON.stringify(results));
   a.close(); b.close();
+});
+
+test('a new read in the same clock millisecond cannot reuse a completed peer result', async t => {
+  const originalNow = Date.now; Date.now = () => 1000; t.after(() => { Date.now = originalNow; });
+  const locks = locksHarness(); const BroadcastChannel = broadcastHarness(); let reads = 0;
+  const read = async () => ({ ...snapshot, queriedAt: 100 + ++reads });
+  const owner = createUsageReadCoordinator({ locks, BroadcastChannel, read });
+  const follower = createUsageReadCoordinator({ locks, BroadcastChannel, read });
+  t.after(() => { owner.close(); follower.close(); });
+  await Promise.all([owner.run(), follower.run()]); assert.equal(reads, 1);
+  assert.equal((await follower.run()).queriedAt, 102);
+  assert.equal(reads, 2);
 });

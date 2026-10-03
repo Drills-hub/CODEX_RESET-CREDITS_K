@@ -24,6 +24,8 @@ let usageAlerts;
 let forecast;
 let activeRefresh;
 let readCoordinator;
+let pageSuspended = false;
+let pageGeneration = 0;
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 
 function node(tag, value, className) {
@@ -226,16 +228,19 @@ async function refresh() {
   return refreshSnapshot();
 }
 async function refreshSnapshot() {
-  if (!sessionReady) return null;
+  if (!sessionReady || pageSuspended) return null;
   if (activeRefresh) return activeRefresh;
+  const expectedGeneration = pageGeneration;
   const run = (async () => {
     dispatch({ type: 'loading' });
     try {
       const snapshot = await readCoordinator.run();
+      if (pageSuspended || expectedGeneration !== pageGeneration) return null;
       dispatch({ type: 'success', snapshot });
       return state.snapshot === snapshot ? snapshot : null;
     }
     catch (error) {
+      if (pageSuspended || expectedGeneration !== pageGeneration) return null;
       dispatch({ type: 'failure', error: failure(error) });
       await pollStatus();
       return null;
@@ -246,9 +251,16 @@ async function refreshSnapshot() {
   return active;
 }
 async function pollStatus() {
-  if (!sessionReady || state.loading) return;
-  try { dispatch({ type: 'status', status: await api('/api/status') }); }
-  catch { state = { ...state, connected: false, usageStale: Boolean(state.snapshot) }; usageAlerts?.pause(); forecast?.pause(); render(); }
+  if (!sessionReady || state.loading || pageSuspended) return;
+  const expectedGeneration = pageGeneration;
+  try {
+    const status = await api('/api/status');
+    if (!pageSuspended && expectedGeneration === pageGeneration) dispatch({ type: 'status', status });
+  }
+  catch {
+    if (pageSuspended || expectedGeneration !== pageGeneration) return;
+    state = { ...state, connected: false, usageStale: Boolean(state.snapshot) }; usageAlerts?.pause(); forecast?.pause(); render();
+  }
 }
 async function start() {
   const token = location.hash.slice(1);
@@ -302,7 +314,18 @@ addEventListener('storage', event => {
   }
   if (event.key === null || event.key === 'reset-check.usage-alerts.enabled.v1') { usageAlerts?.restore(); render(); }
 });
-addEventListener('pagehide', event => { usageAlerts?.pause(); forecast?.disable(); if (!event.persisted) readCoordinator?.close(); });
-addEventListener('pageshow', event => { if (event.persisted) void refresh(); });
+addEventListener('pagehide', event => {
+  pageSuspended = true; pageGeneration++;
+  usageAlerts?.pause();
+  if (event.persisted) forecast?.suspend();
+  else { forecast?.disable(); readCoordinator?.close(); }
+});
+addEventListener('pageshow', event => {
+  if (!event.persisted) return;
+  pageSuspended = false; forecast?.resume();
+  const reload = () => { if (!pageSuspended) void refresh(); };
+  if (activeRefresh) void activeRefresh.then(reload, reload);
+  else reload();
+});
 setInterval(tick, 1000);
 start();

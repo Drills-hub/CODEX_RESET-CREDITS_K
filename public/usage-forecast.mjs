@@ -59,15 +59,16 @@ export function createUsageForecastController({ now = Date.now, refresh, isVisib
   setTimeout: schedule = globalThis.setTimeout, clearTimeout: cancel = globalThis.clearTimeout, onChange = () => {} } = {}) {
   const history = createUsageHistory({ now });
   let enabled = false; let latest; let timer; let lifecycle = 0; let generation = 0; let polling = false; let latestStale = false;
+  let suspended = false;
   function changed() { try { onChange(); } catch {} }
   function clearTimer() { if (timer !== undefined) cancel(timer); timer = undefined; generation++; }
   function plan() {
     clearTimer();
-    if (!enabled || !isVisible() || polling) return;
+    if (!enabled || suspended || !isVisible() || polling) return;
     const expectedLifecycle = lifecycle;
     const expectedGeneration = generation;
     timer = schedule(async () => {
-      if (!enabled || !isVisible() || expectedLifecycle !== lifecycle || expectedGeneration !== generation) return;
+      if (!enabled || suspended || !isVisible() || expectedLifecycle !== lifecycle || expectedGeneration !== generation) return;
       timer = undefined;
       polling = true;
       try {
@@ -81,9 +82,12 @@ export function createUsageForecastController({ now = Date.now, refresh, isVisib
   }
   return {
     get enabled() { return enabled; },
-    enable() { if (enabled) return; enabled = true; lifecycle++; history.clear(); if (latest) history.update(latest); if (latestStale) history.pause(); plan(); changed(); },
-    disable() { enabled = false; lifecycle++; clearTimer(); history.clear(); changed(); },
+    enable() { if (enabled) return; enabled = true; suspended = false; lifecycle++; history.clear(); if (latest) history.update(latest); if (latestStale) history.pause(); plan(); changed(); },
+    disable() { enabled = false; suspended = false; lifecycle++; clearTimer(); history.clear(); changed(); },
+    suspend() { if (suspended) return; suspended = true; lifecycle++; clearTimer(); changed(); },
+    resume() { if (!suspended) return; suspended = false; plan(); changed(); },
     update(value) {
+      if (suspended) return;
       if (!value && !latest) return;
       if (latest && (!value || latest.accountScope !== value.accountScope || latest.revision !== value.revision)) lifecycle++;
       latest = value; latestStale = false;

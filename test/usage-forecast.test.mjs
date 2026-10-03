@@ -172,3 +172,31 @@ test('repeated empty status updates do not postpone the initial automatic read',
   h.setNow(at + 300); h.setSnapshot(value(at + 300, 90)); initial.cancelled = true; await initial.fn();
   assert.equal(h.reads, 1);
 });
+
+test('suspend preserves opt-in and history and resume restores exactly one timer', () => {
+  const h = pollingHarness(); h.controller.update(value(at, 100)); h.controller.enable();
+  h.setNow(at + 300); h.controller.update(value(at + 300, 90));
+  h.setNow(at + 600); h.controller.update(value(at + 600, 80));
+  h.controller.suspend();
+  assert.equal(h.controller.enabled, true); assert.equal(h.controller.read()[0].samples, 3);
+  assert.equal(h.controller.read()[0].state, 'forecast');
+  assert.equal(h.timers.filter(row => !row.cancelled).length, 0);
+  h.controller.visibilityChanged(); h.controller.update(value(at + 600, 70));
+  assert.equal(h.controller.read()[0].ratePerHour, 120);
+  assert.equal(h.timers.filter(row => !row.cancelled).length, 0);
+  h.controller.resume(); h.controller.resume();
+  assert.equal(h.timers.filter(row => !row.cancelled).length, 1);
+  assert.equal(h.timers.find(row => !row.cancelled).delay, 300000);
+});
+
+test('a polling response after suspension cannot alter the retained history', async () => {
+  let release;
+  const h = pollingHarness({ refresh: () => new Promise(resolve => { release = resolve; }) });
+  h.controller.update(value(at, 100)); h.controller.enable(); h.setNow(at + 300);
+  const pending = h.run(); h.controller.suspend();
+  release(value(at + 300, 90)); await pending;
+  assert.equal(h.controller.read()[0].samples, 1);
+  assert.equal(h.timers.filter(row => !row.cancelled).length, 0);
+  h.controller.resume(); assert.equal(h.timers.filter(row => !row.cancelled).length, 1);
+  h.controller.disable(); assert.equal(h.controller.enabled, false); assert.equal(h.controller.read()[0].samples, 0);
+});
