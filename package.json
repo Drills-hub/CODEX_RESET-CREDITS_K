@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test test/codex.test.mjs test/http.test.mjs test/model.test.mjs test/view-state.test.mjs",
+    "test:browser": "node --test test/browser.test.mjs",
     "check": "node --check server.mjs && node --check lib/codex.mjs && node --check lib/service.mjs && node --check public/app.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
   }
 }
