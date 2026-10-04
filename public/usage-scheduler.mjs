@@ -240,6 +240,32 @@ function candidateTimes(access, now, deadline, limit, depletion = []) {
 }
 const depletionTimes = simulation => simulation.segments.filter(s => s.fromPercent > 0 && s.toPercent === 0).map(s => s.toAt);
 
+// Observed budgets only: stop at the first natural reset, which requires a
+// fresh read. Idle time consumes nothing; no hypothetical refill is applied.
+function currentDepletions(snapshot, slots, now, weeklyRate, fiveRate) {
+  const windows = snapshot.usageWindows;
+  if (windows.some(row => row.remainingPercent === 0)) return [];
+  const beforeReset = Math.min(...windows.map(row => row.resetsAt));
+  const found = [];
+  for (const [kind, rate] of [['weekly', weeklyRate], ['five-hour', fiveRate]]) {
+    const row = windows.find(window => window.kind === kind);
+    if (!row || !positive(rate) || row.remainingPercent <= 0) continue;
+    let needed = row.remainingPercent / rate * HOUR;
+    if (!Number.isFinite(needed)) continue;
+    for (const slot of slots) {
+      const start = Math.max(now, slot.startAt), end = Math.min(beforeReset, slot.endAt);
+      if (end <= start) continue;
+      if (needed <= end - start) {
+        const at = start + needed;
+        if (at < beforeReset && Number.isFinite(at)) found.push({ kind, at });
+        break;
+      }
+      needed -= end - start;
+    }
+  }
+  return found.sort((a, b) => a.at - b.at);
+}
+
 export function buildWorkSchedulePlan(snapshot, {
   now = snapshot?.queriedAt, stale = false, refreshing = false, workSlots = [], accessSlots = workSlots,
   weeklyPerHour = null, fiveHourPerHour = null, rateSource = 'manual',
@@ -255,6 +281,7 @@ export function buildWorkSchedulePlan(snapshot, {
     expiredCredits: null, blockedWorkHours: null, weeklyPerHour: null, fiveHourPerHour: null,
     rateSource: rateSource === 'manual' ? 'manual' : 'auto', workSlots: [], accessSlots: [],
     scenarios: [], candidates: [], assumptions: [],
+    currentDepletionAt: null, currentDepletionKind: null, currentDepletionCandidates: [],
   };
   if (plan.state !== 'ready') return plan;
   // Preserve the established read guards, not the old calendar-rate projection or copy.
@@ -268,6 +295,9 @@ export function buildWorkSchedulePlan(snapshot, {
     return incomplete('주간 소모율을 양수 %p/작업시간으로 입력하거나 같은 작업 세션의 검증된 측정을 기다리세요. 5시간 소모율은 별도 값입니다.');
   }
   schedule.weeklyPerHour = weeklyPerHour; schedule.fiveHourPerHour = fiveHourPerHour;
+  schedule.currentDepletionCandidates = currentDepletions(snapshot, schedule.workSlots, now, weeklyPerHour, fiveHourPerHour);
+  schedule.currentDepletionAt = schedule.currentDepletionCandidates[0]?.at ?? null;
+  schedule.currentDepletionKind = schedule.currentDepletionCandidates[0]?.kind ?? null;
   const credits = eligibleCredits(snapshot, now);
   const toCredit = c => c ? { number: c.number, title: typeof c.title === 'string' ? c.title : '리셋권',
     expiresAt: c.expiresAt, deadlineAt: deadlineAt(c, now), resetType: c.resetType === 'codexRateLimits' ? c.resetType : 'unknown' } : null;

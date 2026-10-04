@@ -23,6 +23,9 @@ async function open(t, { read = fixture, status, width = 375, colorScheme = 'lig
   await app.listen(); t.after(() => app.close());
   const context = await browser.newContext({ viewport: { width, height: 950 }, colorScheme, reducedMotion: 'reduce' });
   t.after(() => context.close()); const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'UI event handlers must not throw'));
   await page.clock.install({ time: new Date(at * 1000) });
   await page.goto(`${app.origin}/#${app.bootstrapToken}`);
   await page.waitForFunction(() => document.querySelector('#count').textContent === '2');
@@ -137,6 +140,49 @@ test('work mode preserves the future-query clock guard instead of masking it wit
   await page.locator('#work-hour-rate').fill('10');
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
   assert.equal(await page.locator('#usage-plan-chart .usage-plan-estimate, #usage-plan-chart .usage-plan-scenario').count(), 0);
+});
+
+for (const kind of ['weekly', 'five-hour']) test(`work mode requires requery when the current ${kind} budget is projected depleted`, async t => {
+  const page = await open(t, { read: () => {
+    const result = fixture(); result.credits[0].resetType = 'unknown';
+    result.usageWindows.find(row => row.kind === kind).remainingPercent = 10; return result;
+  } });
+  await page.locator('#work-plan-enabled').check();
+  await addSlot(page, '2026-10-04T09:00', '2026-10-04T13:00');
+  await page.locator('#work-hour-rate').fill('20');
+  if (kind === 'five-hour') await page.locator('#work-five-rate').fill('40');
+  await page.clock.fastForward((kind === 'weekly' ? 1801 : 901) * 1000);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.equal(await page.locator('#usage-plan-chart .usage-plan-estimate, #usage-plan-chart .usage-plan-scenario').count(), 0);
+});
+
+test('changing a work rate before a timer runs cannot discard an elapsed review boundary', async t => {
+  const page = await open(t, { read: () => { const result = fixture(); result.usageWindows[1].remainingPercent = 50; return result; } });
+  await page.locator('#work-plan-enabled').check();
+  await addSlot(page, '2026-10-04T09:00', '2026-10-04T17:00');
+  await page.locator('#work-hour-rate').fill('20');
+  await page.clock.setFixedTime(new Date((at + 9360) * 1000));
+  await page.locator('#work-hour-rate').fill('10');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  await page.locator('#work-hour-rate').fill('1');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+});
+
+test('simple and work modes share snapshot requery state until a successful new read', async t => {
+  let reads = 0;
+  const page = await open(t, { read: () => { const result = fixture(); result.usageWindows[1].remainingPercent = 10;
+    result.queriedAt = reads++ ? at + 1801 : at; return result; } });
+  await page.locator('[name="usage-plan-rate-mode"][value="manual"]').check();
+  await page.locator('#usage-plan-rate').fill('480');
+  await page.clock.fastForward(1801000);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  await page.locator('#work-plan-enabled').check();
+  await addSlot(page, '2026-10-04T10:00', '2026-10-04T13:00');
+  await page.locator('#work-hour-rate').fill('10');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.equal(await page.locator('#usage-plan-chart [data-schedule-state]').getAttribute('data-schedule-state'), 'ready');
 });
 
 for (const colorScheme of ['light', 'dark']) for (const width of [320, 375, 768, 1280]) {

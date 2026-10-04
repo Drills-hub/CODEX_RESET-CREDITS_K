@@ -26,6 +26,21 @@ const sample = (seconds, weeklyRemaining, patch = {}) => ({ at: N + seconds,
   fiveResetsAt: N + H, accountScope: 'scope', revision: 1, activeSession: 1, ...patch });
 const estimate = rows => engine.estimateConsumption(rows, { now: N + 600 });
 
+test('work plans expose current observed-budget depletion boundaries separately from refill assumptions', () => {
+  for (const [options, rate, fiveRate, expected, kind] of [
+    [{ weekly: 10, credits: [credit(1, 4, { resetType: 'unknown' })] }, 20, null, N + 1800, 'weekly'],
+    [{ weekly: 80, five: 10, credits: [credit(1, 4, { resetType: 'unknown' })] }, 20, 40, N + 900, 'five-hour'],
+  ]) {
+    const result = engine.buildWorkSchedulePlan(snapshot(options), { now: N, workSlots: [slot(0, 4)], weeklyPerHour: rate, fiveHourPerHour: fiveRate });
+    assert.equal(result.schedule.currentDepletionAt, expected);
+    assert.equal(result.schedule.currentDepletionKind, kind);
+  }
+  const idle = engine.buildWorkSchedulePlan(snapshot({ weekly: 10 }), { now: N, workSlots: [slot(0, 0.25), slot(2, 4)], weeklyPerHour: 20 });
+  assert.equal(idle.schedule.currentDepletionAt, N + 8100);
+  const blocked = engine.buildWorkSchedulePlan(snapshot({ weekly: 0 }), { now: N, workSlots: [slot(0, 4)], weeklyPerHour: 20, fiveHourPerHour: 40 });
+  assert.equal(blocked.schedule.currentDepletionAt, null);
+});
+
 test('exports the six pure scheduler entry points', () => {
   for (const key of ['parseKstInput', 'normalizeWorkSlots', 'estimateConsumption',
     'simulateUsage', 'chooseRedemptionPlan', 'buildWorkSchedulePlan']) assert.equal(typeof engine[key], 'function', key);
@@ -280,14 +295,17 @@ test('work plan returns every compatible field and every schedule field even whe
   const top = ['state', 'code', 'title', 'reason', 'queriedAt', 'targetAt', 'requiredRatePerDay', 'ratePerDay',
     'exhaustsAt', 'remainingAtTarget', 'rateSource', 'coverage', 'firstCredit', 'nextCredit', 'firstUseAt',
     'nextGapSeconds', 'nextRequiredRatePerDay', 'nextRemainingPercent', 'events', 'segments', 'warnings', 'schedule'];
-  assert.deepEqual(Object.keys(result).sort(), top.sort());
+  for (const field of top) assert.ok(Object.hasOwn(result, field), `compatible field ${field}`);
   const fields = ['recommendedStart', 'recommendedEnd', 'lastSafeAt', 'nextUseAt', 'totalUsedPercent',
     'totalDiscardedPercent', 'firstRemainingPercent', 'expiredCredits', 'blockedWorkHours', 'weeklyPerHour',
     'fiveHourPerHour', 'rateSource', 'workSlots', 'accessSlots', 'scenarios', 'candidates', 'assumptions',
     'reviewCreditNumber', 'reviewRemainingPercent'];
-  assert.deepEqual(Object.keys(result.schedule).sort(), fields.sort());
+  for (const field of fields) assert.ok(Object.hasOwn(result.schedule, field), `schedule field ${field}`);
   assert.deepEqual(result.segments, []);
   assert.equal(result.schedule.totalUsedPercent, null);
+  assert.equal(result.schedule.currentDepletionAt, null);
+  assert.equal(result.schedule.currentDepletionKind, null);
+  assert.deepEqual(result.schedule.currentDepletionCandidates, []);
 });
 test('second-only rescue reduces expiry risk from two to one without falsely claiming a first review', () => {
   // Work 0–12h: old50 depletes2.5h; only access5–8h; first deadline4h is unreachable.

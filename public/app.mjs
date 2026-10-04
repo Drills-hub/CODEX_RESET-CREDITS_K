@@ -36,6 +36,7 @@ const planNumber = new Intl.NumberFormat('ko-KR', { maximumSignificantDigits: 6 
 let planMode = 'auto';
 let planCache;
 let projectionExpiredSnapshot;
+let projectionExpiredReason;
 const motion = createMotionController();
 const announcementKeys = new Map();
 const pendingAnnouncements = new Map();
@@ -56,6 +57,7 @@ let reminderError = '';
 let animateSnapshotChanges = false;
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 const workPlanner = createWorkPlanController(document.getElementById('usage-plan'), { onChange: () => {
+  latchSimpleBoundary(state.snapshot);
   planCache = undefined;
   renderRecommendation(state.snapshot);
 } });
@@ -108,6 +110,7 @@ function dispatch(event) {
   if (accountChanged) clearUsagePlan();
   if (event.type === 'success' && state.snapshot === event.snapshot) {
     projectionExpiredSnapshot = undefined;
+    projectionExpiredReason = undefined;
     workPlanner.invalidate();
     workPlanner.record(event.snapshot);
   }
@@ -267,11 +270,25 @@ function clearUsagePlan() {
   planRate.setAttribute('aria-invalid', 'false');
   planCache = undefined;
   projectionExpiredSnapshot = undefined;
+  projectionExpiredReason = undefined;
   planView.clear();
   Object.values(planCompact).forEach(element => { element.textContent = ''; });
 }
+function latchSimpleBoundary(snapshot) {
+  if (!snapshot || planCache?.snapshot !== snapshot) return;
+  const plan = planCache.plan, now = Date.now() / 1000;
+  const positive = snapshot.usageWindows?.some(row => row.kind === 'weekly' && row.remainingPercent > 0);
+  const deadline = plan.firstCredit?.deadlineAt > snapshot.queriedAt && plan.firstCredit.deadlineAt <= now;
+  if ((positive && Number.isFinite(plan.exhaustsAt) && plan.exhaustsAt >= planCache.referenceNow && plan.exhaustsAt <= now) || deadline) {
+    projectionExpiredSnapshot = snapshot;
+    if (deadline) projectionExpiredReason = 'credit-deadline';
+  }
+}
 function usagePlan(snapshot, legacy) {
+  latchSimpleBoundary(snapshot);
+  if (snapshot && projectionExpiredSnapshot === snapshot) workPlanner.suspend(snapshot);
   const scheduled = workPlanner.read(snapshot, { stale: state.usageStale || !state.connected || state.authState !== 'chatgpt', refreshing: state.loading });
+  if (workPlanner.requiresRefresh(snapshot)) projectionExpiredSnapshot = snapshot;
   planModes.forEach(input => { input.disabled = workPlanner.enabled; });
   if (workPlanner.enabled) { planRate.disabled = true; planError.textContent = ''; return scheduled; }
   const now = Date.now() / 1000;
@@ -299,6 +316,10 @@ function usagePlan(snapshot, legacy) {
     let plan = buildUsagePlan(snapshot, { now: referenceNow, refreshing: state.loading,
       stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' || expiredProjection,
       ratePerDay, rateSource: planMode });
+    if (plan.code === 'refresh-needed' && expiredProjection && projectionExpiredReason === 'credit-deadline') {
+      plan = { ...plan, title: '리셋권 마감 후 재조회가 필요합니다.',
+        reason: '첫 리셋권 안전 마감 또는 만료 시각이 지났습니다. 이전 잔여량으로 계획하지 않고 최신 상태를 재조회한 뒤 사용 여부를 검토하세요.' };
+    }
     if (positiveWeeklyBalance && plan.state === 'ready' && Number.isFinite(plan.exhaustsAt)
       && plan.exhaustsAt >= referenceNow && plan.exhaustsAt <= now) {
       projectionExpiredSnapshot = snapshot;

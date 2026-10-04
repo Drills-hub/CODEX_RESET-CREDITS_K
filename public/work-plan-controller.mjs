@@ -20,7 +20,16 @@ export function createWorkPlanController(root, { now = () => Date.now() / 1000, 
   let cache;
   let expiredSnapshot;
   const automatic = () => modes.find(input => input.checked)?.value === 'auto';
-  const changed = () => { version++; cache = undefined; onChange(); };
+  function checkBoundaries(snapshot = cache?.snapshot) {
+    const plan = snapshot && cache?.snapshot === snapshot ? cache.plan : null;
+    if (!snapshot || plan?.state !== 'ready') return;
+    const edge = plan.schedule?.recommendedEnd ?? plan.firstUseAt;
+    const depletion = plan.schedule?.currentDepletionAt;
+    if ((edge > snapshot.queriedAt && edge <= now())
+      || (plan.firstCredit?.deadlineAt > snapshot.queriedAt && plan.firstCredit.deadlineAt <= now())
+      || (Number.isFinite(depletion) && depletion >= snapshot.queriedAt && depletion <= now())) expiredSnapshot = snapshot;
+  }
+  const changed = () => { checkBoundaries(); version++; cache = undefined; onChange(); };
   function renderSlots() {
     list.replaceChildren();
     entries.forEach((entry, index) => {
@@ -58,6 +67,7 @@ export function createWorkPlanController(root, { now = () => Date.now() / 1000, 
     expiredSnapshot = undefined; version++; cache = undefined;
   }
   function read(snapshot, { stale = false, refreshing = false } = {}) {
+    checkBoundaries(snapshot);
     settings.hidden = !enabled.checked;
     weekly.disabled = automatic(); five.disabled = automatic();
     const speed = estimateConsumption(samples, { now: Math.floor(now()) });
@@ -71,13 +81,6 @@ export function createWorkPlanController(root, { now = () => Date.now() / 1000, 
       || (five.value !== '' && (!five.validity.valid || !Number.isFinite(five.valueAsNumber) || five.valueAsNumber < 0)));
     weekly.setAttribute('aria-invalid', String(manualBad && (!Number.isFinite(weekly.valueAsNumber) || weekly.valueAsNumber <= 0)));
     five.setAttribute('aria-invalid', String(manualBad && five.value !== '' && (!five.validity.valid || five.valueAsNumber < 0)));
-    const positive = snapshot?.usageWindows?.some(row => row.kind === 'weekly' && row.remainingPercent > 0);
-    const previous = cache?.plan;
-    if (snapshot && cache?.snapshot === snapshot && previous?.state === 'ready') {
-      const edge = previous.schedule?.recommendedEnd ?? previous.firstUseAt;
-      if ((edge > snapshot.queriedAt && edge <= now()) || (previous.firstCredit?.deadlineAt > snapshot.queriedAt && previous.firstCredit.deadlineAt <= now())) expiredSnapshot = snapshot;
-      if (positive && previous.exhaustsAt !== null && previous.exhaustsAt >= snapshot.queriedAt && previous.exhaustsAt <= now()) expiredSnapshot = snapshot;
-    }
     const realResetPassed = snapshot?.usageWindows?.some(row => Number.isSafeInteger(row.resetsAt) && row.resetsAt <= now());
     const speedKey = [speed.state, speed.weeklyPerHour, speed.fiveHourPerHour];
     const key = JSON.stringify([version, stale, refreshing, realResetPassed, expiredSnapshot === snapshot, manualBad, speedKey]);
@@ -90,7 +93,9 @@ export function createWorkPlanController(root, { now = () => Date.now() / 1000, 
       const edge = plan.schedule?.recommendedEnd ?? plan.firstUseAt;
       const first = plan.firstCredit;
       const deadlinePassed = first && ((first.deadlineAt > snapshot?.queriedAt && first.deadlineAt <= now()) || first.expiresAt <= now());
-      if (plan.state === 'ready' && ((edge > snapshot?.queriedAt && edge <= now()) || deadlinePassed)) {
+      const depletion = plan.schedule?.currentDepletionAt;
+      const depletionPassed = Number.isFinite(depletion) && depletion >= snapshot?.queriedAt && depletion <= now();
+      if (plan.state === 'ready' && ((edge > snapshot?.queriedAt && edge <= now()) || deadlinePassed || depletionPassed)) {
         expiredSnapshot = snapshot;
         plan = buildWorkSchedulePlan(snapshot, { now: now(), stale: true, workSlots: [], rateSource: automatic() ? 'auto' : 'manual' });
       }
@@ -111,5 +116,8 @@ export function createWorkPlanController(root, { now = () => Date.now() / 1000, 
     get('work-slot-start').value = ''; get('work-slot-end').value = ''; get('work-slot-access-only').checked = false;
     weekly.removeAttribute('aria-invalid'); five.removeAttribute('aria-invalid'); renderSlots();
   }
-  return { get enabled() { return enabled.checked; }, record, read, clear, invalidate() { cache = undefined; expiredSnapshot = undefined; } };
+  return { get enabled() { return enabled.checked; }, record, read, clear,
+    requiresRefresh(snapshot) { return Boolean(snapshot && expiredSnapshot === snapshot); },
+    suspend(snapshot) { if (snapshot && expiredSnapshot !== snapshot) { expiredSnapshot = snapshot; cache = undefined; version++; } },
+    invalidate() { cache = undefined; expiredSnapshot = undefined; } };
 }
