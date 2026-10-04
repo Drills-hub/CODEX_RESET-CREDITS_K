@@ -70,6 +70,24 @@ test('stable reminder keys distinguish identical display rows without exposing r
   assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_/);
 });
 
+test('preserves only the supported reset type while sanitizing credit details', () => {
+  const snapshot = normalizeCredits({
+    accountId: 'SECRET_ACCOUNT', accessToken: 'SECRET_TOKEN',
+    rateLimits: {},
+    rateLimitResetCredits: { availableCount: 4, credits: [
+      { id: 'a', status: 'available', expiresAt: 100, resetType: 'codexRateLimits', privateField: 'SECRET_FIELD' },
+      { id: 'b', status: 'available', expiresAt: 200, resetType: 'other' },
+      { id: 'c', status: 'available', expiresAt: 300 },
+      { id: 'd', status: 'available', expiresAt: 400, resetType: { value: 'codexRateLimits' } },
+    ] },
+  });
+
+  assert.deepEqual(snapshot.credits.map(credit => credit.resetType), [
+    'codexRateLimits', 'unknown', 'unknown', 'unknown',
+  ]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /SECRET|privateField/);
+});
+
 test('usage windows are identified by duration, not primary and secondary position', () => {
   const snapshot = normalizeCredits({ rateLimits: {
     primary: { windowDurationMins: 10080, usedPercent: 80, resetsAt: 90000 },
