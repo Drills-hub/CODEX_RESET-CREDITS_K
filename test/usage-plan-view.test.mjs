@@ -81,7 +81,9 @@ test('schedule inputs are labelled, memory-only and do not enlarge the empty mai
     assert.equal(await page.locator(`#${id}`).evaluate(node => node.getBoundingClientRect().height), 0);
   }
   for (const selector of ['.usage-plan-rate-choice', '#usage-plan-rate']) {
-    for (const box of await page.locator(selector).evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()))) {
+    const boxes = await page.locator(selector).evaluateAll(nodes => nodes.filter(node => node.getClientRects().length > 0).map(node => node.getBoundingClientRect().toJSON()));
+    assert.ok(boxes.length > 0, `${selector} must expose visible controls`);
+    for (const box of boxes) {
       assert.ok(box.height >= 44 && box.width >= 44, `${selector} touch target`);
     }
   }

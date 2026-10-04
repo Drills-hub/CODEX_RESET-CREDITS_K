@@ -398,7 +398,7 @@ for (const theme of ['light', 'dark']) for (const mode of ['auto', 'manual']) {
         const rect = document.querySelector(selector).getBoundingClientRect();
         return [selector, { top: rect.top, bottom: rect.bottom, height: rect.height }];
       })),
-      controls: [...document.querySelectorAll('#refresh, [role="tab"], .usage-plan-rate-choice, #usage-plan-rate')].map(element => element.getBoundingClientRect().height),
+      controls: [...document.querySelectorAll('#refresh, [role="tab"], .usage-plan-rate-choice, #usage-plan-rate')].filter(element => element.getClientRects().length > 0).map(element => element.getBoundingClientRect().height),
       overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     }));
     console.log(`Future-credit first viewport ${theme} ${mode}: ${JSON.stringify(geometry)}`);
@@ -424,7 +424,7 @@ for (const theme of ['light', 'dark']) for (const width of [320, 375, 768, 1280]
     await page.evaluate(() => scrollTo(0, 0));
     const geometry = await page.evaluate(() => ({
       overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-      controls: [...document.querySelectorAll('.usage-plan-rate-choice, #usage-plan-rate')].map(element => element.getBoundingClientRect().height),
+      controls: [...document.querySelectorAll('.usage-plan-rate-choice, #usage-plan-rate')].filter(element => element.getClientRects().length > 0).map(element => element.getBoundingClientRect().height),
       events: document.querySelectorAll('#usage-plan-chart .usage-plan-event-list li').length,
       markers: document.querySelectorAll('#usage-plan-chart [data-event-kind]').length,
       animations: document.getAnimations().filter(animation => animation.effect.getTiming().duration > 1).length,

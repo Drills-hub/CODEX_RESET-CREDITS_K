@@ -3,6 +3,7 @@ import { initialState, updateState } from './state.mjs';
 import { createReminderController } from './notifications.mjs';
 import { recommendUsage, buildUsagePlan } from './usage-timing.mjs';
 import { createUsagePlanView } from './usage-plan-view.mjs';
+import { createWorkPlanController } from './work-plan-controller.mjs';
 import { createUsageAlertController } from './usage-alerts.mjs';
 import { createUsageForecastController } from './usage-forecast.mjs';
 import { compareStartTimes } from './start-time-comparison.mjs';
@@ -54,6 +55,10 @@ let usageAlertError = '';
 let reminderError = '';
 let animateSnapshotChanges = false;
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
+const workPlanner = createWorkPlanController(document.getElementById('usage-plan'), { onChange: () => {
+  planCache = undefined;
+  renderRecommendation(state.snapshot);
+} });
 
 const tabs = createTabController({
   tablist,
@@ -101,7 +106,11 @@ function dispatch(event) {
     || (['signed-out', 'unsupported'].includes(state.authState) && state.authState !== previousState.authState)
     || (event.type === 'failure' && event.error.clearPrevious);
   if (accountChanged) clearUsagePlan();
-  if (event.type === 'success' && state.snapshot === event.snapshot) projectionExpiredSnapshot = undefined;
+  if (event.type === 'success' && state.snapshot === event.snapshot) {
+    projectionExpiredSnapshot = undefined;
+    workPlanner.invalidate();
+    workPlanner.record(event.snapshot);
+  }
   if (reminders) {
     if (event.type === 'success' && state.snapshot === event.snapshot) { reminderError = ''; reminders.update(event.snapshot); }
     else if (event.type === 'failure') {
@@ -250,6 +259,7 @@ function renderUsage(snapshot) {
     : 'partial';
 }
 function clearUsagePlan() {
+  workPlanner.clear();
   planMode = 'auto';
   planRate.value = '';
   planModes.forEach(input => { input.checked = input.value === 'auto'; });
@@ -261,6 +271,9 @@ function clearUsagePlan() {
   Object.values(planCompact).forEach(element => { element.textContent = ''; });
 }
 function usagePlan(snapshot, legacy) {
+  const scheduled = workPlanner.read(snapshot, { stale: state.usageStale || !state.connected || state.authState !== 'chatgpt', refreshing: state.loading });
+  planModes.forEach(input => { input.disabled = workPlanner.enabled; });
+  if (workPlanner.enabled) { planRate.disabled = true; planError.textContent = ''; return scheduled; }
   const now = Date.now() / 1000;
   const weeklyForecast = forecast?.enabled ? forecast.read().find(row => row.kind === 'weekly') : null;
   const automaticRate = ['forecast', 'reset-first'].includes(weeklyForecast?.state) && Number.isFinite(weeklyForecast.ratePerHour) && weeklyForecast.ratePerHour > 0
@@ -319,7 +332,7 @@ function usagePlan(snapshot, legacy) {
 function renderRecommendation(snapshot) {
   const legacy = recommendUsage(snapshot, { refreshing: state.loading, stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
   const plan = usagePlan(snapshot, legacy);
-  const recommendation = plan.firstCredit || ['invalid-rate', 'refresh-needed'].includes(plan.code) || projectionExpiredSnapshot === snapshot && snapshot ? plan : legacy;
+  const recommendation = workPlanner.enabled || plan.firstCredit || ['invalid-rate', 'refresh-needed'].includes(plan.code) || projectionExpiredSnapshot === snapshot && snapshot ? plan : legacy;
   planView.update(plan);
   const readyPlan = plan.state === 'ready' && plan.firstCredit !== null;
   setText(planCompact.summary, readyPlan ? `필요 소모량: ${plan.requiredRatePerDay === null ? '즉시 재조회 필요' : `${planNumber.format(plan.requiredRatePerDay)} %p/일`}` : '');
@@ -342,13 +355,36 @@ function renderRecommendation(snapshot) {
     if (plan.coverage === 'partial') reason = `조회된 항목 중 ${reason}`;
     reason += snapshot.ordinaryUsageAllowed === true ? ' 5시간 한도를 확인하세요.' : ' 5시간 한도·사용 허용을 확인한 경우에만 활용하세요.';
   }
+  if (workPlanner.enabled) {
+    const scheduled = plan.schedule;
+    const valid = plan.state === 'ready' && scheduled;
+    const timestamp = at => Number.isFinite(at) ? formatKst(Math.floor(at)) : '확인 불가';
+    let range = '';
+    if (valid && Number.isFinite(scheduled.recommendedStart)) {
+      range = timestamp(scheduled.recommendedStart);
+      if (scheduled.recommendedEnd !== scheduled.recommendedStart) {
+        const end = timestamp(scheduled.recommendedEnd);
+        range += ` ~ ${range.slice(0, 10) === end.slice(0, 10) ? end.slice(11, 19) : end}`;
+      }
+    }
+    setText(planCompact.summary, range ? `${scheduled.reviewCreditNumber ? `${scheduled.reviewCreditNumber}번 ` : ''}권장 검토 구간: ${range}` : '');
+    setText(planCompact['first-use'], valid && Number.isFinite(scheduled.lastSafeAt) ? `최종 접속 마감: ${timestamp(scheduled.lastSafeAt)}` : '');
+    const discarded = scheduled?.reviewRemainingPercent ?? scheduled?.firstRemainingPercent;
+    setText(planCompact.leftover, valid && Number.isFinite(discarded) ? `기존량 포기 예상: ${planNumber.format(discarded)}%` : '');
+    setText(planCompact['next-gap'], valid && Number.isFinite(plan.nextGapSeconds) ? `첫 검토 → 다음 안전 마감: ${planNumber.format(plan.nextGapSeconds / 3600)}시간` : '');
+    recommendationTiming.hidden = true;
+    if (valid && range && snapshot?.usageWindows?.every(row => row.remainingPercent > 0)) {
+      title = '작업 일정에 맞춰 리셋권을 검토하세요.';
+      reason = `${plan.coverage === 'partial' ? '조회된 항목 중 ' : ''}권장 구간에 재조회 후 검토하세요. ${scheduled.expiredCredits > 0 ? '접속 시간 부족으로 소멸 위험이 남습니다.' : '소비량·복구는 가정이며 5시간 한도와 사용 허용을 확인해야 합니다.'}`;
+    }
+  }
   elements.recommendation.dataset.code = recommendation.code;
   setText(elements['recommendation-title'], title, { emphasize: true });
   elements['recommendation-reason'].textContent = reason;
   setText(elements['recommendation-target'], recommendation.targetAt === null ? snapshot ? '해당 없음' : '확인 전' : formatKst(recommendation.targetAt), { emphasize: true });
   elements['recommendation-remaining'].textContent = recommendation.targetAt === null ? '' : remainingTime(recommendation.targetAt);
   elements['recommendation-queried-at'].textContent = snapshot ? formatKst(snapshot.queriedAt) : '확인 전';
-  const actionable = ['ready', 'weekly-budget', 'weekly-reset', 'five-hour-reset', 'credit-deadline', 'credit-before-expiry', 'credit-after-depletion', 'natural-reset-first'].includes(recommendation.code);
+  const actionable = workPlanner.enabled ? plan.state === 'ready' : ['ready', 'weekly-budget', 'weekly-reset', 'five-hour-reset', 'credit-deadline', 'credit-before-expiry', 'credit-after-depletion', 'natural-reset-first'].includes(recommendation.code);
   elements['recommendation-disclaimer'].textContent = actionable
     ? '잔여량을 활용하기 위한 권고이며, 작업 횟수나 사용 가능 시간을 보장하지 않습니다.'
     : '최신 상태를 확인한 뒤 사용 시점을 다시 안내합니다.';

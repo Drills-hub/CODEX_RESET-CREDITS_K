@@ -89,6 +89,36 @@
             <p id="usage-plan-input-error" aria-live="polite"></p>
             <p id="usage-plan-rate-hint" class="muted">하루는 달력 기준 24시간입니다. %p는 잔여율의 감소량이며, 입력값은 이 화면의 메모리에만 유지됩니다. 자동 계산은 사용 추세가 켜져 있고 유효한 속도가 있을 때 표시합니다.</p>
           </fieldset>
+          <label class="usage-plan-rate-choice"><input id="work-plan-enabled" type="checkbox">작업 일정으로 리셋권 사용 계획하기</label>
+          <div id="work-plan-settings" hidden>
+            <p class="muted">작업 시간과 리셋권을 확인할 수 있는 시간을 입력하세요. 일정과 측정 이력은 메모리에만 보관하며 리셋권을 자동 사용하지 않습니다.</p>
+            <fieldset class="usage-plan-rate-settings">
+              <legend>작업 시간당 소모 속도</legend>
+              <div class="usage-plan-rate-modes">
+                <label class="usage-plan-rate-choice"><input type="radio" name="work-rate-mode" value="manual" checked>작업 속도 입력</label>
+                <label class="usage-plan-rate-choice"><input type="radio" name="work-rate-mode" value="auto">작업 중 측정값</label>
+              </div>
+              <div class="work-input-grid">
+                <label>주간 소모량 (%p/작업시간)<input id="work-hour-rate" type="number" min="0" step="any" inputmode="decimal" aria-describedby="work-rate-status work-plan-error"></label>
+                <label>5시간 소모량 (%p/작업시간, 선택)<input id="work-five-rate" type="number" min="0" step="any" inputmode="decimal" aria-describedby="work-rate-status work-plan-error"></label>
+              </div>
+              <label class="usage-plan-rate-choice"><input id="work-active" type="checkbox">지금 작업 중: 속도 측정</label>
+              <p id="work-rate-status" class="muted">작업 중으로 표시한 구간의 성공 조회 3건부터 계산합니다. 자동 조회를 새로 켜지 않습니다.</p>
+              <p class="muted">하루 평균과 다른 단위입니다. 5시간 속도를 모르면 해당 병목을 수치로 보장하지 않습니다. 느림·기준·빠름은 가정 비교이며 통계적 신뢰구간이 아닙니다.</p>
+            </fieldset>
+            <fieldset class="usage-plan-rate-settings">
+              <legend>작업·접속 시간 추가 (KST)</legend>
+              <div class="work-input-grid">
+                <label>시작<input id="work-slot-start" type="datetime-local" step="60" aria-describedby="work-plan-error"></label>
+                <label>종료<input id="work-slot-end" type="datetime-local" step="60" aria-describedby="work-plan-error"></label>
+              </div>
+              <label class="usage-plan-rate-choice"><input id="work-slot-access-only" type="checkbox">리셋권 확인만 가능: 작업 소비 제외</label>
+              <button id="work-slot-add" class="button-secondary" type="button">시간 추가</button>
+              <p class="muted">최대 8개 구간. 겹치는 작업 시간은 한 번만 계산합니다. 작업 시간에는 리셋권 확인도 가능하다고 가정합니다.</p>
+              <ul id="work-slots" class="work-slots" aria-label="계획된 작업과 접속 시간"></ul>
+            </fieldset>
+            <p id="work-plan-error" role="status" aria-live="polite"></p>
+          </div>
           <div id="usage-plan-chart"></div>
         </section>
         <section id="start-time-comparison" class="comparison" aria-labelledby="comparison-title" aria-busy="false">
