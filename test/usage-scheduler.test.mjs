@@ -283,10 +283,75 @@ test('work plan returns every compatible field and every schedule field even whe
   assert.deepEqual(Object.keys(result).sort(), top.sort());
   const fields = ['recommendedStart', 'recommendedEnd', 'lastSafeAt', 'nextUseAt', 'totalUsedPercent',
     'totalDiscardedPercent', 'firstRemainingPercent', 'expiredCredits', 'blockedWorkHours', 'weeklyPerHour',
-    'fiveHourPerHour', 'rateSource', 'workSlots', 'accessSlots', 'scenarios', 'candidates', 'assumptions'];
+    'fiveHourPerHour', 'rateSource', 'workSlots', 'accessSlots', 'scenarios', 'candidates', 'assumptions',
+    'reviewCreditNumber', 'reviewRemainingPercent'];
   assert.deepEqual(Object.keys(result.schedule).sort(), fields.sort());
   assert.deepEqual(result.segments, []);
   assert.equal(result.schedule.totalUsedPercent, null);
+});
+test('second-only rescue reduces expiry risk from two to one without falsely claiming a first review', () => {
+  // Work 0–12h: old50 depletes2.5h; only access5–8h; first deadline4h is unreachable.
+  // Second review7h leaves5h of work: old50+refill100=150 used,0 discarded,1 expired scenario credit.
+  const value = snapshot(), options = { workSlots: [slot(0, 12)], accessSlots: [slot(5, 8)] };
+  const baseline = simulate(value, options.workSlots, [], options);
+  assert.equal(baseline.metrics.expiredCredits, 2);
+  near(baseline.metrics.totalUsedPercent, 50);
+  const result = plan(value, options);
+  assert.equal(result.schedule.expiredCredits, 1);
+  assert.equal(result.firstUseAt, null);
+  assert.equal(result.schedule.firstRemainingPercent, null);
+  assert.equal(result.schedule.nextUseAt, N + 7 * H);
+  assert.equal(result.nextRemainingPercent, 0);
+  assert.equal(result.schedule.reviewCreditNumber, 2);
+  assert.equal(result.schedule.reviewRemainingPercent, 0);
+  assert.equal(result.schedule.lastSafeAt, N + 8 * H);
+  assert.equal(result.schedule.recommendedStart, N + 5 * H);
+  assert.equal(result.schedule.recommendedEnd, N + 7 * H);
+  assert.equal(result.targetAt, N + 8 * H);
+  near(result.schedule.totalUsedPercent, 150);
+  near(result.schedule.totalDiscardedPercent, 0);
+  assert.deepEqual(result.events.filter(e => e.kind === 'credit-use').map(e => e.creditNumber), [2]);
+  assert.match(result.reason, /첫.*만료|첫.*위험/);
+  assert.match(result.reason, /2번.*검토/);
+  assert.ok(result.schedule.candidates.some(c => c.firstUseAt === null && c.nextUseAt === N + 7 * H && c.expiredCredits === 1));
+  assert.deepEqual(result.schedule.scenarios.map(s => s.expiredCredits), [1, 1, 1]);
+});
+test('simulation associates balances with eligible credit identity rather than chronological review ordinal', () => {
+  const result = simulate(snapshot(), [slot(0, 12)], [review(2, 5)]);
+  assert.equal(result.firstUseAt, null);
+  assert.equal(result.nextUseAt, N + 5 * H);
+  assert.equal(result.metrics.firstRemainingPercent, null);
+  assert.equal(result.metrics.nextRemainingPercent, 0);
+  assert.equal(result.metrics.expiredCredits, 1);
+});
+test('second-only candidates are evaluated even when first credit also has feasible access', () => {
+  // Both deadlines now permit only one review. Both single-credit alternatives must be scored.
+  const result = plan(snapshot({ credits: [credit(1, -0.5), credit(2, -0.4)] }));
+  assert.equal(result.schedule.expiredCredits, 1);
+  assert.ok(result.schedule.candidates.some(c => c.firstUseAt === N && c.nextUseAt === null));
+  assert.ok(result.schedule.candidates.some(c => c.firstUseAt === null && c.nextUseAt === N));
+  assert.equal(result.schedule.reviewCreditNumber, 1);
+  assert.equal(result.schedule.reviewRemainingPercent, 50);
+});
+test('second-only recommended window never bridges separated access intervals', () => {
+  const result = plan(snapshot({ five: 0 }), { accessSlots: [slot(5, 5.25), slot(7.5, 8)] });
+  assert.equal(result.firstUseAt, null);
+  assert.equal(result.schedule.nextUseAt, N + 8 * H);
+  assert.equal(result.schedule.recommendedStart, N + 7.5 * H);
+  assert.equal(result.schedule.recommendedEnd, N + 8 * H);
+  assert.equal(result.schedule.reviewCreditNumber, 2);
+  assert.equal(result.schedule.reviewRemainingPercent, 50);
+});
+test('unknown second-only review remains provisional without numeric after-effect claims', () => {
+  const result = plan(snapshot({ credits: [credit(1, 4), credit(2, 8, { resetType: 'unknown' })] }),
+    { accessSlots: [slot(5, 8)] });
+  assert.equal(result.firstUseAt, null);
+  assert.equal(result.schedule.nextUseAt, N + 8 * H);
+  assert.equal(result.schedule.reviewCreditNumber, 2);
+  assert.equal(result.schedule.expiredCredits, 1);
+  assert.equal(result.schedule.totalUsedPercent, null);
+  assert.deepEqual(result.schedule.scenarios, []);
+  assert.ok(result.segments.every(s => s.toAt <= result.schedule.nextUseAt));
 });
 test('work plan chooses both credits using active work depletion and identical horizons', () => {
   const result = plan();
