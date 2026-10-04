@@ -72,6 +72,21 @@ test('slow depletion stops at the deadline and explains allowance sacrificed', (
   assert.match(result.reason, /40%.*포기/);
 });
 
+test('visible leftover uses six significant digits without rounding numeric projections', () => {
+  const result = plan(snapshot({ weekly: 80, credits: [credit(1, day - 3600), credit(2, 3 * day - 3600)] }), { ratePerDay: 40 });
+  assert.match(result.reason, /예상 잔여 41\.6667%/);
+  assert.doesNotMatch(result.reason, /41\.666666/);
+  assert.equal(result.remainingAtTarget, 41.666666666666664);
+  assert.equal(result.segments[0].toPercent, 41.666666666666664);
+  assert.equal(result.nextGapSeconds, 172800);
+  assert.equal(result.nextRemainingPercent, 20);
+
+  const immediate = plan(snapshot({ five: 0, weekly: 80, credits: [credit(1, -1800)] }), { ratePerDay: 40 / 3,
+    now: now + 1 });
+  assert.match(immediate.reason, /예상 잔여 80%/);
+  assert.equal(immediate.remainingAtTarget, 80);
+});
+
 test('natural weekly reset at or before the first deadline is the first target', () => {
   for (const weekIn of [day / 2, day]) {
     const result = plan(snapshot({ weekIn }), { ratePerDay: 100 });

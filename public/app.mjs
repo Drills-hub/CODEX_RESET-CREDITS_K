@@ -267,8 +267,8 @@ function usagePlan(snapshot, legacy) {
   const manualRate = planRate.valueAsNumber;
   const invalid = planMode === 'manual' && (!planRate.validity.valid || !Number.isFinite(manualRate) || manualRate <= 0);
   const ratePerDay = planMode === 'manual' ? invalid ? null : manualRate : Number.isFinite(automaticRate) ? automaticRate : null;
-  // Keep projections anchored to the successful read. Only schedule boundaries
-  // advance that reference; countdown seconds must not rebuild the chart.
+  // Consumption stays anchored to the successful read. Real-time boundaries
+  // suspend the old projection; they never advance its balance reference.
   if (planCache?.snapshot === snapshot && planCache.plan.exhaustsAt > planCache.referenceNow && planCache.plan.exhaustsAt <= now) projectionExpiredSnapshot = snapshot;
   const suspended = ['not-ready', 'refreshing', 'refresh-needed', 'server-restricted', 'incomplete'].includes(legacy.code);
   const boundary = [...(snapshot?.credits ?? []).flatMap(row => row.expiryState === 'known' ? [row.expiresAt - 3600, row.expiresAt] : []),
@@ -277,13 +277,19 @@ function usagePlan(snapshot, legacy) {
   const key = JSON.stringify([legacy.code, state.loading, state.usageStale, state.connected, state.authState, planMode, planRate.value, invalid,
     weeklyForecast?.state, ratePerDay, boundary, expiredProjection]);
   if (!planCache || planCache.snapshot !== snapshot || planCache.key !== key) {
-    const referenceNow = suspended || expiredProjection ? now : Math.max(snapshot?.queriedAt ?? now, boundary ?? 0);
+    const referenceNow = suspended || expiredProjection ? now : snapshot?.queriedAt ?? now;
     let plan = buildUsagePlan(snapshot, { now: referenceNow, refreshing: state.loading,
       stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' || expiredProjection,
       ratePerDay, rateSource: planMode });
     if (plan.state === 'ready' && plan.exhaustsAt > referenceNow && plan.exhaustsAt <= now) {
       projectionExpiredSnapshot = snapshot;
       plan = buildUsagePlan(snapshot, { now, stale: true, rateSource: planMode });
+    }
+    const first = plan.firstCredit;
+    if (plan.state === 'ready' && first && ((first.deadlineAt > referenceNow && first.deadlineAt <= now) || first.expiresAt <= now)) {
+      plan = { ...buildUsagePlan(snapshot, { now, stale: true, rateSource: planMode }),
+        title: '리셋권 마감 후 재조회가 필요합니다.',
+        reason: '첫 리셋권 안전 마감 또는 만료 시각이 지났습니다. 이전 잔여량으로 계획하지 않고 최신 상태를 재조회한 뒤 사용 여부를 검토하세요.' };
     }
     if (invalid && plan.state === 'ready') {
       plan = { ...plan, state: 'incomplete', code: 'invalid-rate', title: '예상 하루 소모량을 확인해 주세요.',
@@ -307,7 +313,7 @@ function usagePlan(snapshot, legacy) {
 function renderRecommendation(snapshot) {
   const legacy = recommendUsage(snapshot, { refreshing: state.loading, stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
   const plan = usagePlan(snapshot, legacy);
-  const recommendation = plan.firstCredit || plan.code === 'invalid-rate' || projectionExpiredSnapshot === snapshot && snapshot ? plan : legacy;
+  const recommendation = plan.firstCredit || ['invalid-rate', 'refresh-needed'].includes(plan.code) || projectionExpiredSnapshot === snapshot && snapshot ? plan : legacy;
   planView.update(plan);
   const readyPlan = plan.state === 'ready' && plan.firstCredit !== null;
   setText(planCompact.summary, readyPlan ? `주간 목표까지 필요한 소모량: ${plan.requiredRatePerDay === null ? '즉시 재조회 필요' : `${planNumber.format(plan.requiredRatePerDay)} %p/일`}` : '');

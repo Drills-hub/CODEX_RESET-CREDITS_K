@@ -42,6 +42,7 @@ const CREDIT_COVERAGE = new Set(['complete', 'partial', 'count-only', 'unavailab
 const finiteOrNull = value => Number.isFinite(value) ? value : null;
 const clampPercent = value => Math.min(100, Math.max(0, value));
 const balanceAfter = (percent, rate, seconds) => clampPercent(percent - rate * (seconds / DAY_SECONDS));
+const planNumberFormatter = new Intl.NumberFormat('ko-KR', { maximumSignificantDigits: 6 });
 
 // A line reaching zero early is split so the chart never stretches depletion
 // over the remainder of the interval. This is an estimate, not usage permission.
@@ -143,7 +144,7 @@ export function buildUsagePlan(snapshot, {
       ? `${scope}첫 리셋권 만료 1시간 전을 안전 마감으로 삼아 재조회 후 사용 여부를 검토하세요. 소진 예상 시각은 확인할 수 없습니다.`
       : plan.code === 'credit-after-depletion'
         ? `${scope}현재 주간 잔여량을 소진한 뒤 재조회하고 첫 리셋권 사용을 검토하세요.`
-        : `${scope}안전 마감까지 현재 주간 잔여량을 활용한 뒤 재조회하고 첫 리셋권 사용을 검토하세요. 예상 잔여 ${plan.remainingAtTarget}%를 포기할 수 있습니다.`;
+        : `${scope}안전 마감까지 현재 주간 잔여량을 활용한 뒤 재조회하고 첫 리셋권 사용을 검토하세요. 예상 잔여 ${planNumberFormatter.format(plan.remainingAtTarget)}%를 포기할 수 있습니다.`;
     plan.events.push({ kind: 'credit-use', at: plan.firstUseAt,
       label: rate === null ? '첫 리셋권 안전 마감 · 재조회 후 사용 검토' : '첫 리셋권 사용 검토 시각 · 소진 속도 가정',
       creditNumber: first.number, assumed: true });
@@ -176,7 +177,7 @@ export function buildUsagePlan(snapshot, {
     if (first && plan.firstUseAt === now) {
       plan.title = '첫 리셋권을 즉시 재조회하고 사용 여부를 검토하세요.';
       plan.reason = `${coverage === 'partial' ? '조회된 항목 중 ' : ''}첫 리셋권 ${rate === null ? '안전 마감' : '검토 시각'}이 현재이므로 즉시 재조회하고 첫 리셋권 사용 여부를 검토하세요.`;
-      if (plan.remainingAtTarget !== null && plan.remainingAtTarget > 0) plan.reason += ` 예상 잔여 ${plan.remainingAtTarget}%를 포기할 수 있습니다.`;
+      if (plan.remainingAtTarget !== null && plan.remainingAtTarget > 0) plan.reason += ` 예상 잔여 ${planNumberFormatter.format(plan.remainingAtTarget)}%를 포기할 수 있습니다.`;
       if (rate === null) plan.reason += ' 소진 예상 시각은 확인할 수 없습니다.';
       plan.reason += ` ${restriction}`;
     } else if (first) {

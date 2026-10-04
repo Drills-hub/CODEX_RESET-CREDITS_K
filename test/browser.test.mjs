@@ -110,6 +110,8 @@ test('usage plan manual rate connects real engine, main summary and conditional 
   await manualPlan(page);
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-before-expiry');
   assert.match(await page.locator('#recommendation-reason').innerText(), /허용.*확인/);
+  assert.match(await page.locator('#recommendation-reason').innerText(), /41\.6667%/);
+  assert.doesNotMatch(await page.locator('#recommendation-reason').innerText(), /41\.666666/);
   assert.match(await planMetric(page, '목표 시점 예상 잔여량'), /41\.6667%/);
   assert.match(await page.locator('#usage-plan-leftover').innerText(), /41\.6667%/);
   assert.match(await planMetric(page, '첫 사용 검토부터 다음 안전 마감까지'), /48시간/);
@@ -233,9 +235,10 @@ test('usage plan ticks preserve SVG nodes and announcements, boundaries requery 
   assert.equal(await page.evaluate(() => __planMutations), 0);
   assert.equal(await page.evaluate(() => __planAnnouncements), 0);
   await page.clock.runFor(3000);
-  assert.match(await page.locator('#usage-plan-chart').innerText(), /즉시 재조회/);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.match(await page.locator('#usage-plan-chart').innerText(), /마감.*재조회/);
   await page.clock.fastForward(3600000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'natural-reset-first');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
   assert.doesNotMatch(await page.locator('#usage-plan-first-use').innerText(), /2026-10-04 09:00:05/);
   await page.clock.fastForward(100000);
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
@@ -258,6 +261,53 @@ test('usage plan newly entered rate suspends immediately when its snapshot estim
   const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
   await page.clock.runFor(20000);
   await manualPlan(page, '691200');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
+});
+
+test('usage plan deadline continuity suspends old balance until a successful requery', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let reads = 0;
+  const page = await openApp(t, { clockTime: planAt * 1000, read: () => {
+    reads++;
+    return planSnapshot({ at: reads === 1 ? planAt : planAt + 82801, remaining: reads === 1 ? 80 : 42 });
+  } });
+  await manualPlan(page, '40');
+  assert.match(await page.locator('#usage-plan-leftover').innerText(), /41\.6667%/);
+  await page.clock.fastForward(82801000);
+  assert.equal(reads, 1);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.equal(await page.locator('#usage-plan-leftover').innerText(), '');
+  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
+  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /80%/);
+  assert.match(await page.locator('#usage-plan-chart').innerText(), /마감.*재조회/);
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.equal(reads, 2);
+  assert.match(await page.locator('#usage-plan-leftover').innerText(), /42%/);
+  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /42%/);
+  assert.equal(await page.locator('#usage-plan-rate').inputValue(), '40');
+});
+
+test('usage plan extreme rate after deadline cannot resume an old actionable estimate', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let reads = 0;
+  const page = await openApp(t, { clockTime: planAt * 1000, read: () => { reads++; return planSnapshot(); } });
+  await page.clock.fastForward(82801000);
+  await manualPlan(page, '691200');
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.equal(await page.locator('#usage-plan-first-use').innerText(), '');
+  assert.equal(await page.locator('#usage-plan-leftover').innerText(), '');
+  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
+  assert.equal(reads, 1);
+});
+
+test('usage plan elapsed-depletion entry after a clock jump suspends without a timer tick', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
+  await manualPlan(page, '40');
+  await page.clock.setSystemTime(new Date((planAt + 82801) * 1000));
+  await page.locator('#usage-plan-rate').fill('691200');
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
   assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
 });
