@@ -127,6 +127,50 @@ body[data-loading="true"] .usage, body[data-loading="true"] .recommendation, bod
 .section-title h3 { font-size: 17px; }
 .panel-heading { margin-bottom: 6px; }
 
+.usage-plan-compact { font-size: 13px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.usage-plan-compact p:empty { display: none; }
+.usage-plan-compact p:not(:empty) { margin-top: 4px; }
+.usage-plan { min-width: 0; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.usage-plan-rate-settings { min-width: 0; margin: 18px 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-group); }
+.usage-plan-rate-settings legend { padding-inline: 6px; font-size: 14px; font-weight: 700; }
+.usage-plan-rate-modes { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.usage-plan-rate-choice { display: flex; align-items: center; min-height: 44px; gap: 8px; cursor: pointer; font-size: 14px; }
+.usage-plan-rate-choice input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.usage-plan-rate-label { display: block; margin: 12px 0 6px; font-size: 14px; }
+#usage-plan-rate { width: min(100%, 240px); min-width: 44px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--bg-page); color: var(--text-primary); font: inherit; }
+.usage-plan input:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+#usage-plan-rate-hint, #usage-plan-input-error { font-size: 13px; margin-top: 8px; }
+#usage-plan-input-error { color: var(--error); }
+#usage-plan-input-error:empty { display: none; }
+.usage-plan-view h3 { margin: 0 0 6px; font-size: 17px; }
+.usage-plan-reason { font-size: 14px; color: var(--text-secondary); }
+.usage-plan-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; margin: 18px 0; }
+.usage-plan-metrics div { min-width: 0; }
+.usage-plan-metrics dt { color: var(--text-muted); font-size: 13px; }
+.usage-plan-metrics dd { margin: 4px 0 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.usage-plan-warnings { margin: 14px 0; padding-left: 20px; color: var(--warning); font-size: 14px; }
+.usage-plan-warnings li + li { margin-top: 6px; }
+.usage-plan-figure { min-width: 0; margin: 22px 0 0; }
+.usage-plan-figure figcaption { margin-bottom: 8px; font-size: 14px; font-weight: 700; }
+.usage-plan-figure svg { display: block; width: 100%; max-width: 640px; height: auto; margin-inline: auto; overflow: hidden; }
+.usage-plan-axis { stroke: var(--border-strong); stroke-width: 1; }
+.usage-plan-grid { stroke: var(--border); stroke-width: 1; }
+.usage-plan-tick { fill: var(--text-secondary); font-size: 16px; font-variant-numeric: tabular-nums; }
+.usage-plan-estimate { stroke: var(--accent); stroke-width: 3; fill: none; }
+.usage-plan-scenario { stroke: var(--success); stroke-width: 3; stroke-dasharray: 7 5; fill: none; }
+.usage-plan-event-guide { stroke: var(--border-strong); stroke-width: 1; }
+.usage-plan-event-marker { fill: var(--bg-surface); stroke: var(--accent); stroke-width: 2; }
+.usage-plan-event-marker[data-event-kind="credit-expiry"] { stroke: var(--warning); }
+.usage-plan-event-marker[data-assumed="true"] { stroke-dasharray: 3 2; }
+.usage-plan-event-number { fill: var(--text-primary); font-size: 15px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+.usage-plan-range, .usage-plan-chart-note { margin-top: 8px; color: var(--text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-plan-event-list, .usage-plan-segment-list { margin: 12px 0 0; padding-left: 24px; font-size: 14px; }
+.usage-plan-event-list li, .usage-plan-segment-list li { padding-left: 2px; }
+.usage-plan-event-list li + li, .usage-plan-segment-list li + li { margin-top: 12px; }
+.usage-plan-event-list time { display: block; color: var(--text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-plan-segment-list { list-style: square; color: var(--text-secondary); }
+.usage-plan-empty { margin-top: 10px; color: var(--text-muted); font-size: 14px; }
+
 .comparison { overflow-wrap: anywhere; }
 #comparison-status { margin: 9px 0 18px; font-size: 14px; }
 .comparison table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 14px; text-align: left; }
@@ -204,6 +248,9 @@ footer { margin-top: 30px; padding: 22px 0 0; border-top: 1px solid var(--border
   .recommendation-timing { margin-top: 9px; }
   #recommendation-target, #recommendation-remaining { font-size: 11px; }
   .recommendation-meta { display: none; }
+  .usage-plan-compact { font-size: 11px; }
+  .usage-plan-rate-settings { padding: 12px; }
+  .usage-plan-metrics { grid-template-columns: 1fr; gap: 10px; }
   .summary { grid-template-columns: 100px 1fr; gap: 14px; margin-top: 16px; padding-top: 16px; }
   .balance strong { font-size: 36px; }
   .next-expiry { padding: 0 0 0 14px; border-top: 0; border-left: 1px solid var(--border); }
