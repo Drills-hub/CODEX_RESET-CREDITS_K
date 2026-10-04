@@ -66,6 +66,7 @@ test('read endpoint returns no-store snapshots and rejects arbitrary bodies/RPC 
   assert.equal((await fetch(`${url}/api/reset-credits/read`, { method: 'POST', headers, body: '{"method":"account/rateLimitResetCredit/consume"}' })).status, 400);
   assert.equal((await fetch(`${url}/api/rpc`, { method: 'POST', headers, body: '{}' })).status, 404);
   assert.equal((await fetch(`${url}/api/reset-credits/read`, { method: 'GET', headers })).status, 405);
+  assert.equal((await fetch(`${url}/api/status?tab=forecast`, { headers })).status, 400);
 });
 test('static assets apply CSP and never expose project or auth files', async t => {
   const { url } = await setup(t);
@@ -73,6 +74,9 @@ test('static assets apply CSP and never expose project or auth files', async t =
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /default-src 'self'/);
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal((await fetch(`${url}/?tab=forecast&source=desktop`)).status, 200);
+  assert.equal((await fetch(`${url}/tabs.mjs`)).status, 200);
+  assert.equal((await fetch(`${url}/motion.mjs`)).status, 200);
   for (const path of ['/package.json', '/.codex/auth.json', '/lib/codex.mjs', '/missing']) {
     assert.equal((await fetch(`${url}${path}`)).status, 404);
   }

@@ -3,102 +3,117 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codex 리셋권 확인</title>
+  <meta name="color-scheme" content="light dark">
+  <title>Codex 사용량과 리셋권</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.mjs"></script>
 </head>
 <body>
-  <main>
-    <header>
-      <div class="eyebrow">CODEX · RESET CREDITS</div>
-      <h1>리셋권, 언제까지<br class="mobile-break"> 사용할 수 있나요?</h1>
-      <p class="intro">지급 시각부터 만료까지, 한국 시간으로 확인하세요.</p>
+  <main class="dashboard">
+    <header class="page-header">
+      <p class="eyebrow">CODEX USAGE</p>
+      <h1>Codex 사용량과 리셋권</h1>
+      <p class="intro">5시간·주간 잔여량과 리셋권 만료 시각을 KST로 확인합니다.</p>
+      <section class="toolbar" aria-label="조회 상태">
+        <span id="connection" class="connection">연결 확인 중</span>
+        <p class="query-meta">마지막 조회 <span id="queried-at">확인 전</span></p>
+        <button id="refresh" class="button-primary" type="button">새로고침</button>
+      </section>
+      <div id="notice" class="notice" role="status" aria-live="polite">Codex 계정에 연결하고 있습니다.</div>
+      <div id="usage-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
     </header>
-    <section class="toolbar" aria-label="조회 상태">
-      <span id="connection" class="connection">연결 확인 중</span>
-      <button id="refresh" type="button">새로고침 <span aria-hidden="true">↻</span></button>
-    </section>
-    <div id="notice" class="notice" role="status" aria-live="polite">Codex 계정에 연결하고 있습니다.</div>
-    <div id="usage-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
-    <section id="usage-panel" class="usage" aria-labelledby="usage-title" aria-busy="false">
-      <div class="section-title"><h2 id="usage-title">잔여 사용량</h2><span>KST · UTC+09:00</span></div>
-      <p id="usage-status" class="muted">조회 후 사용 한도를 표시합니다.</p>
-      <div class="usage-grid">
-        <article id="usage-five-hour" class="usage-window" aria-labelledby="usage-five-hour-title">
-          <h3 id="usage-five-hour-title">5시간 한도</h3>
-          <p class="usage-balance"><strong class="usage-percent">—</strong><span class="muted">남음</span></p>
-          <progress max="100" value="0" aria-label="5시간 잔여 사용량" hidden></progress>
-          <p class="usage-label">리셋 시각</p><p class="usage-reset">확인 불가</p><p class="usage-remaining muted"></p>
-        </article>
-        <article id="usage-weekly" class="usage-window" aria-labelledby="usage-weekly-title">
-          <h3 id="usage-weekly-title">주간 한도</h3>
-          <p class="usage-balance"><strong class="usage-percent">—</strong><span class="muted">남음</span></p>
-          <progress max="100" value="0" aria-label="주간 잔여 사용량" hidden></progress>
-          <p class="usage-label">리셋 시각</p><p class="usage-reset">확인 불가</p><p class="usage-remaining muted"></p>
-        </article>
+
+    <section id="main-status-card" class="main-status-card" aria-labelledby="main-status-title">
+      <div class="card-heading">
+        <div>
+          <p class="section-kicker">현재 사용 가능 상태</p>
+          <h2 id="main-status-title">지금 알아야 할 정보</h2>
+        </div>
+        <span class="timezone">KST · UTC+09:00</span>
       </div>
+      <section id="usage-panel" class="usage" aria-labelledby="usage-title" aria-busy="false">
+        <h3 id="usage-title" class="sr-only">잔여 사용량</h3>
+        <p id="usage-status" class="muted">조회 후 사용 한도를 표시합니다.</p>
+        <div class="usage-grid">
+          <article id="usage-five-hour" class="usage-window" aria-labelledby="usage-five-hour-title">
+            <h3 id="usage-five-hour-title">5시간 한도</h3>
+            <p class="usage-balance"><strong class="usage-percent">확인 전</strong><span class="muted">남음</span></p>
+            <progress max="100" value="0" aria-label="5시간 잔여 사용량" hidden></progress>
+            <p class="usage-label">리셋 시각</p><p class="usage-reset">확인 불가</p><p class="usage-remaining muted"></p>
+          </article>
+          <article id="usage-weekly" class="usage-window" aria-labelledby="usage-weekly-title">
+            <h3 id="usage-weekly-title">주간 한도</h3>
+            <p class="usage-balance"><strong class="usage-percent">확인 전</strong><span class="muted">남음</span></p>
+            <progress max="100" value="0" aria-label="주간 잔여 사용량" hidden></progress>
+            <p class="usage-label">리셋 시각</p><p class="usage-reset">확인 불가</p><p class="usage-remaining muted"></p>
+          </article>
+        </div>
+      </section>
+      <section id="recommendation" class="recommendation" aria-labelledby="recommendation-heading" aria-busy="false">
+        <h3 id="recommendation-heading">사용 시점 추천</h3>
+        <p id="recommendation-title" class="recommendation-title">조회 후 사용 시점을 안내합니다.</p>
+        <p id="recommendation-reason">5시간·주간 한도를 조회해 주세요.</p>
+        <div class="recommendation-timing"><p class="usage-label">관련 리셋 시각</p><p id="recommendation-target">확인 전</p><p id="recommendation-remaining" class="muted"></p></div>
+        <p class="recommendation-meta">마지막 조회 <span id="recommendation-queried-at">확인 전</span></p>
+        <p id="recommendation-disclaimer" class="recommendation-meta">조회가 완료되면 최신 사용량을 기준으로 안내합니다.</p>
+      </section>
+      <section class="summary" aria-label="리셋권 요약">
+        <div class="balance"><p class="label">사용 가능한 리셋권</p><div><strong id="count">확인 전</strong><span class="unit">개</span></div></div>
+        <div class="next-expiry"><p class="label">조회된 리셋권 중 가장 가까운 만료</p><p id="nearest">아직 조회하지 않았습니다.</p><p id="nearest-remaining" class="muted"></p></div>
+      </section>
     </section>
-    <section id="recommendation" class="recommendation" aria-labelledby="recommendation-heading" aria-busy="false">
-      <h2 id="recommendation-heading">사용 시점 추천</h2>
-      <h3 id="recommendation-title">조회 후 사용 시점을 안내합니다.</h3>
-      <p id="recommendation-reason">5시간·주간 한도를 조회해 주세요.</p>
-      <p class="usage-label">관련 리셋 시각</p><p id="recommendation-target">—</p><p id="recommendation-remaining" class="muted"></p>
-      <p class="recommendation-meta">마지막 조회 <span id="recommendation-queried-at">—</span></p>
-      <p id="recommendation-disclaimer" class="recommendation-meta">조회가 완료되면 최신 사용량을 기준으로 안내합니다.</p>
-    </section>
-    <section id="start-time-comparison" class="comparison" aria-labelledby="comparison-title" aria-busy="false">
-      <div class="section-title"><h2 id="comparison-title">작업 시작 시각 비교</h2><span>KST · UTC+09:00</span></div>
-      <p id="comparison-status" class="muted">조회 후 작업 시작 시각을 비교합니다.</p>
-      <table>
-        <caption>지금·5시간 리셋 후·주간 리셋 후의 확인 사항</caption>
-        <thead><tr><th scope="col">시작 시점</th><th scope="col">시각·대기 시간</th><th scope="col">조회된 한도와 확인 사항</th></tr></thead>
-        <tbody>
-          <tr id="comparison-now"><th scope="row">지금</th><td data-label="시각·대기 시간"><p class="comparison-time">—</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
-          <tr id="comparison-five-hour"><th scope="row">5시간 리셋 후</th><td data-label="시각·대기 시간"><p class="comparison-time">—</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
-          <tr id="comparison-weekly"><th scope="row">주간 리셋 후</th><td data-label="시각·대기 시간"><p class="comparison-time">—</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
-        </tbody>
-      </table>
-      <p class="comparison-meta muted">마지막 조회 <span id="comparison-queried-at">—</span></p>
-      <p class="comparison-meta muted">미래 잔여량이나 사용 권한을 확정하지 않습니다. 실제 작업 시작 전에 새로고침으로 확인하세요.</p>
-    </section>
-    <section id="usage-alerts" class="notifications" aria-labelledby="usage-alerts-title" aria-busy="false">
-      <div class="section-title"><h2 id="usage-alerts-title">사용량 알림</h2><button id="usage-alerts-toggle" type="button" aria-pressed="false" disabled>사용량 알림 켜기</button></div>
-      <p id="usage-alerts-status" class="muted">리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.</p>
-      <p class="muted">앱과 탭이 열려 있을 때만 동작합니다. 잔여량은 새 조회가 있을 때 확인합니다.</p>
-    </section>
-    <section id="usage-forecast" class="forecast" aria-labelledby="forecast-title" aria-busy="false">
-      <div class="section-title"><h2 id="forecast-title">사용 추세</h2><button id="forecast-toggle" type="button" aria-pressed="false" disabled>추세 켜기</button></div>
-      <p id="forecast-status" class="muted">추세를 켜면 사용 속도와 예상 소진 시각을 계산합니다.</p>
-      <div class="usage-grid">
-        <article id="forecast-five-hour" class="forecast-window" aria-labelledby="forecast-five-hour-title">
-          <h3 id="forecast-five-hour-title">5시간 한도</h3><p class="forecast-state muted">추세를 켜면 조회 이력을 수집합니다.</p>
-          <dl><dt>소모 속도</dt><dd class="forecast-rate">—</dd><dt>예상 소진 시각</dt><dd class="forecast-exhaustion">—</dd></dl>
-          <p class="forecast-samples muted">최근 30분 성공 조회 0건</p>
-        </article>
-        <article id="forecast-weekly" class="forecast-window" aria-labelledby="forecast-weekly-title">
-          <h3 id="forecast-weekly-title">주간 한도</h3><p class="forecast-state muted">추세를 켜면 조회 이력을 수집합니다.</p>
-          <dl><dt>소모 속도</dt><dd class="forecast-rate">—</dd><dt>예상 소진 시각</dt><dd class="forecast-exhaustion">—</dd></dl>
-          <p class="forecast-samples muted">최근 30분 성공 조회 0건</p>
-        </article>
+
+    <nav class="tabs-wrap" aria-label="사용량 상세 정보">
+      <div id="dashboard-tabs" class="tabs" role="tablist" aria-label="사용량 상세 정보">
+        <button id="tab-schedule" class="tab" type="button" role="tab" data-tab="schedule" aria-controls="panel-schedule" aria-selected="true">리셋 일정</button>
+        <button id="tab-forecast" class="tab" type="button" role="tab" data-tab="forecast" aria-controls="panel-forecast" aria-selected="false" tabindex="-1">사용 추세</button>
+        <button id="tab-alerts" class="tab" type="button" role="tab" data-tab="alerts" aria-controls="panel-alerts" aria-selected="false" tabindex="-1">알림</button>
+        <button id="tab-credits" class="tab" type="button" role="tab" data-tab="credits" aria-controls="panel-credits" aria-selected="false" tabindex="-1">리셋 상세</button>
+        <span class="tab-indicator" data-tab-indicator aria-hidden="true"></span>
       </div>
-      <p class="muted forecast-note">%p는 잔여율의 퍼센트포인트 감소량입니다. 추정값은 사용 권한·작업 횟수·사용 가능 시간을 보장하지 않습니다.</p>
-    </section>
-    <section class="summary" aria-label="리셋권 요약">
-      <div class="balance"><p class="label">사용 가능한 리셋권</p><div><strong id="count">—</strong><span class="unit">개</span></div></div>
-      <div class="next-expiry"><p class="label">조회된 리셋권 중 가장 가까운 만료</p><p id="nearest">아직 조회하지 않았습니다.</p><p id="nearest-remaining" class="muted"></p></div>
-    </section>
-    <section class="notifications" aria-labelledby="notifications-title">
-      <div class="section-title"><h2 id="notifications-title">만료 알림</h2><button id="notifications-toggle" type="button" aria-pressed="false" disabled>알림 켜기</button></div>
-      <p id="notifications-status" class="muted">브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.</p>
-    </section>
-    <section class="details" aria-labelledby="details-title">
-      <div class="section-title"><h2 id="details-title">리셋권 상세</h2><span>KST · UTC+09:00</span></div>
-      <p id="coverage" class="muted">조회 후 상세 정보를 표시합니다.</p>
-      <div id="credits"></div>
-    </section>
+    </nav>
+
+    <div class="tab-panels">
+      <div id="panel-schedule" class="tab-panel" role="tabpanel" data-tab-panel="schedule" aria-labelledby="tab-schedule" tabindex="0">
+        <section id="start-time-comparison" class="comparison" aria-labelledby="comparison-title" aria-busy="false">
+          <div class="section-title"><h2 id="comparison-title">작업 시작 시각 비교</h2><span>KST · UTC+09:00</span></div>
+          <p id="comparison-status" class="muted">조회 후 작업 시작 시각을 비교합니다.</p>
+          <table>
+            <caption>지금·5시간 리셋 후·주간 리셋 후의 확인 사항</caption>
+            <thead><tr><th scope="col">시작 시점</th><th scope="col">시각·대기 시간</th><th scope="col">조회된 한도와 확인 사항</th></tr></thead>
+            <tbody>
+              <tr id="comparison-now"><th scope="row">지금</th><td data-label="시각·대기 시간"><p class="comparison-time">확인 전</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
+              <tr id="comparison-five-hour"><th scope="row">5시간 리셋 후</th><td data-label="시각·대기 시간"><p class="comparison-time">확인 전</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
+              <tr id="comparison-weekly"><th scope="row">주간 리셋 후</th><td data-label="시각·대기 시간"><p class="comparison-time">확인 전</p><p class="comparison-wait muted"></p></td><td data-label="조회된 한도와 확인 사항"><p class="comparison-resets"></p><p class="comparison-limits muted"></p><p class="comparison-message">조회 후 확인합니다.</p></td></tr>
+            </tbody>
+          </table>
+          <p class="comparison-meta muted">마지막 조회 <span id="comparison-queried-at">확인 전</span></p>
+          <p class="comparison-meta muted">미래 잔여량이나 사용 권한을 확정하지 않습니다. 실제 작업 시작 전에 새로고침으로 확인하세요.</p>
+        </section>
+      </div>
+      <div id="panel-forecast" class="tab-panel" role="tabpanel" data-tab-panel="forecast" aria-labelledby="tab-forecast" tabindex="0" hidden>
+        <section id="usage-forecast" class="forecast" aria-labelledby="forecast-title" aria-busy="false">
+          <div class="section-title"><h2 id="forecast-title">사용 추세</h2><button id="forecast-toggle" class="button-secondary" type="button" aria-pressed="false" disabled>추세 켜기</button></div>
+          <p id="forecast-status" class="muted">추세를 켜면 사용 속도와 예상 소진 시각을 계산합니다.</p>
+          <div class="usage-grid">
+            <article id="forecast-five-hour" class="forecast-window" aria-labelledby="forecast-five-hour-title"><h3 id="forecast-five-hour-title">5시간 한도</h3><p class="forecast-state muted">추세를 켜면 조회 이력을 수집합니다.</p><dl><dt>소모 속도</dt><dd class="forecast-rate">계산 전</dd><dt>예상 소진 시각</dt><dd class="forecast-exhaustion">계산 전</dd></dl><p class="forecast-samples muted">최근 30분 성공 조회 0건</p></article>
+            <article id="forecast-weekly" class="forecast-window" aria-labelledby="forecast-weekly-title"><h3 id="forecast-weekly-title">주간 한도</h3><p class="forecast-state muted">추세를 켜면 조회 이력을 수집합니다.</p><dl><dt>소모 속도</dt><dd class="forecast-rate">계산 전</dd><dt>예상 소진 시각</dt><dd class="forecast-exhaustion">계산 전</dd></dl><p class="forecast-samples muted">최근 30분 성공 조회 0건</p></article>
+          </div>
+          <p class="muted forecast-note">%p는 잔여율의 퍼센트포인트 감소량입니다. 추정값은 사용 권한·작업 횟수·사용 가능 시간을 보장하지 않습니다.</p>
+        </section>
+      </div>
+      <div id="panel-alerts" class="tab-panel" role="tabpanel" data-tab-panel="alerts" aria-labelledby="tab-alerts" tabindex="0" hidden>
+        <div class="section-title panel-heading"><h2>알림 설정</h2><span>열린 앱과 탭에서만 동작</span></div>
+        <section id="usage-alerts" class="notifications" aria-labelledby="usage-alerts-title" aria-busy="false"><div class="section-title"><h3 id="usage-alerts-title">사용량 알림</h3><button id="usage-alerts-toggle" class="button-secondary" type="button" aria-pressed="false" disabled>사용량 알림 켜기</button></div><p id="usage-alerts-status" class="muted">리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.</p><p class="muted">앱과 탭이 열려 있을 때만 동작합니다. 잔여량은 새 조회가 있을 때 확인합니다.</p></section>
+        <section class="notifications" aria-labelledby="notifications-title"><div class="section-title"><h3 id="notifications-title">만료 알림</h3><button id="notifications-toggle" class="button-secondary" type="button" aria-pressed="false" disabled>알림 켜기</button></div><p id="notifications-status" class="muted">브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.</p></section>
+      </div>
+      <div id="panel-credits" class="tab-panel" role="tabpanel" data-tab-panel="credits" aria-labelledby="tab-credits" tabindex="0" hidden>
+        <section class="details" aria-labelledby="details-title"><div class="section-title"><h2 id="details-title">리셋권 상세</h2><span>KST · UTC+09:00</span></div><p id="coverage" class="muted">조회 후 상세 정보를 표시합니다.</p><div id="credits"></div></section>
+      </div>
+    </div>
+
     <footer>
-      <p>마지막 조회 <span id="queried-at">—</span></p>
-      <p>남은 시간은 PC 시계 기준입니다. 최신 상태는 새로고침으로 확인하세요.</p>
+      <section class="data-guidance" aria-labelledby="data-guidance-title"><h2 id="data-guidance-title">데이터 해석 안내</h2><p>남은 시간은 PC 시계 기준입니다. 최신 상태는 새로고침으로 확인하세요.</p><p>미래 잔여량과 사용 권한은 확정하지 않으며, 조회된 값만 표시합니다.</p></section>
       <p class="privacy">개인 PC에서 실행 · 인증 정보는 화면에 표시하지 않습니다.</p>
     </footer>
   </main>

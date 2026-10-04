@@ -10,7 +10,7 @@ test('Unix seconds convert across the KST date boundary', () => {
 });
 test('countdown uses the local clock and never becomes negative', () => {
   assert.equal(remainingTime(183845, 0), '2일 03시간 04분 05초');
-  assert.equal(remainingTime(100, 100000), '만료 시각 경과 — 새로고침 필요');
+  assert.equal(remainingTime(100, 100000), '만료 시각 경과: 새로고침 필요');
 });
 test('summary unavailable differs from zero and count-only data', () => {
   assert.equal(normalizeCredits({ rateLimits: {} }, 0).detailState, 'unavailable');
@@ -20,7 +20,7 @@ test('summary unavailable differs from zero and count-only data', () => {
   const only = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 3, credits: null } }, 0);
   assert.equal(only.detailState, 'count-only');
   assert.equal(only.availableCount, 3);
-  assert.match(emptyMessage(only), /상세 정보 미제공/);
+  assert.match(emptyMessage(only), /상세 정보가 제공되지 않았/);
 });
 test('required rate-limit envelope is validated while optional reset details remain unavailable', () => {
   for (const result of [{}, { rateLimits: null }, { rateLimits: [] }, { rateLimits: 'bad' }]) {

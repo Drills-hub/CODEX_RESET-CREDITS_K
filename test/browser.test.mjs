@@ -25,7 +25,7 @@ const longSnapshot = {
   ],
 };
 
-async function openApp(t, { read, authState = 'chatgpt', sessionDelayMs = 0, context = browser, clockTime } = {}) {
+async function openApp(t, { read, authState = 'chatgpt', sessionDelayMs = 0, context = browser, clockTime, entryPath = '/' } = {}) {
   let reads = 0;
   const service = {
     status: async () => ({ connected: true, authState: typeof authState === 'function' ? authState() : authState, revision: 0, busy: false }),
@@ -45,15 +45,21 @@ async function openApp(t, { read, authState = 'chatgpt', sessionDelayMs = 0, con
     await new Promise(resolve => setTimeout(resolve, sessionDelayMs));
     await route.continue();
   });
-  await page.goto(`${app.origin}/#${app.bootstrapToken}`);
+  const separator = entryPath.includes('?') ? '#' : '#';
+  await page.goto(`${app.origin}${entryPath}${separator}${app.bootstrapToken}`);
   await page.waitForFunction(() => {
     const refresh = document.querySelector('#refresh');
     const count = document.querySelector('#count')?.textContent;
     const notice = document.querySelector('#notice');
     const completed = notice?.textContent === '조회가 완료되었습니다.' || notice?.dataset.kind === 'error';
-    return refresh && !refresh.disabled && (count !== '—' || completed);
+    return refresh && !refresh.disabled && (count !== '확인 전' || completed);
   });
   return page;
+}
+
+async function selectTab(page, tabId) {
+  await page.locator(`[role="tab"][data-tab="${tabId}"]`).click();
+  await page.waitForFunction(id => document.querySelector(`[data-tab-panel="${id}"]`)?.hidden === false, tabId);
 }
 
 function keyboardFocusIsVisible(focus) {
@@ -81,7 +87,7 @@ for (const width of widths) {
     const page = await openApp(t);
     await page.setViewportSize({ width, height: 950 });
     const geometry = await page.evaluate(() => {
-      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#coverage', '.credit', '#usage-five-hour', '#usage-weekly', '#usage-status', '#recommendation', '#usage-alerts', '#usage-forecast', '#start-time-comparison'];
+      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#usage-five-hour', '#usage-weekly', '#recommendation', '#start-time-comparison'];
       const boxes = selectors.map(selector => {
         const element = document.querySelector(selector);
         const rect = element.getBoundingClientRect();
@@ -106,7 +112,6 @@ for (const width of widths) {
     for (const box of geometry.boxes) assert.ok(box.left >= 0 && box.right <= width, `${box.selector} must fit viewport`);
     assert.deepEqual(geometry.clipped, [], `content must not be clipped: ${geometry.clipped.join(', ')}`);
     assert.deepEqual(geometry.overlaps, [], `content boxes must not overlap: ${geometry.overlaps.join(', ')}`);
-    assert.match(await page.locator('#coverage').innerText(), /1개|부분|조회/);
     await page.keyboard.press('Tab');
     const focus = await page.evaluate(() => {
       const active = document.activeElement;
@@ -128,8 +133,142 @@ for (const width of widths) {
     assert.equal(keyboardFocusIsVisible(focus), true, `keyboard focus must be visible: ${JSON.stringify(focus)}`);
     await page.screenshot({ path: join(outputDir, `long-partial-${width}.png`), fullPage: true });
     await page.locator('#start-time-comparison').screenshot({ path: join(outputDir, `comparison-${width}.png`) });
+    await selectTab(page, 'credits');
+    assert.match(await page.locator('#coverage').innerText(), /1개|부분|조회/);
+    assert.equal(await page.locator('.credit').count(), 1);
+    if (width === 375 || width === 1280) {
+      await page.waitForTimeout(240);
+      await page.screenshot({ path: join(outputDir, `credits-${width}.png`), fullPage: true });
+      await selectTab(page, 'forecast');
+      await page.waitForTimeout(240);
+      await page.screenshot({ path: join(outputDir, `forecast-${width}.png`), fullPage: true });
+      await selectTab(page, 'alerts');
+      await page.waitForTimeout(240);
+      await page.screenshot({ path: join(outputDir, `alerts-${width}.png`), fullPage: true });
+    }
   });
 }
+
+test('dashboard tabs expose ARIA state, preserve query values, and follow browser history', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { entryPath: '/?source=desktop&tab=forecast' });
+  assert.equal(new URL(page.url()).hash, '');
+  assert.equal(new URL(page.url()).searchParams.get('source'), 'desktop');
+  assert.equal(new URL(page.url()).searchParams.get('tab'), 'forecast');
+  const tabs = page.getByRole('tab');
+  assert.equal(await tabs.count(), 4);
+  assert.equal(await page.getByRole('tab', { name: '사용 추세' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('[data-tab-panel="forecast"]').isVisible(), true);
+  assert.equal(await page.locator('[data-tab-panel="schedule"]').isVisible(), false);
+
+  await page.getByRole('tab', { name: '사용 추세' }).press('ArrowRight');
+  assert.equal(await page.getByRole('tab', { name: '알림' }).getAttribute('aria-selected'), 'true');
+  assert.equal(new URL(page.url()).searchParams.get('tab'), 'alerts');
+  await page.goBack();
+  await page.waitForFunction(() => document.querySelector('[data-tab="forecast"]')?.getAttribute('aria-selected') === 'true');
+  assert.equal(new URL(page.url()).searchParams.get('tab'), 'forecast');
+
+  await page.getByRole('tab', { name: '사용 추세' }).press('End');
+  assert.equal(await page.getByRole('tab', { name: '리셋 상세' }).getAttribute('aria-selected'), 'true');
+  await page.getByRole('tab', { name: '리셋 상세' }).press('Home');
+  assert.equal(await page.getByRole('tab', { name: '리셋 일정' }).getAttribute('aria-selected'), 'true');
+});
+
+test('invalid tab values normalize to schedule without discarding other query values', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { entryPath: '/?source=desktop&tab=unknown' });
+  const url = new URL(page.url());
+  assert.equal(url.hash, '');
+  assert.equal(url.searchParams.get('source'), 'desktop');
+  assert.equal(url.searchParams.get('tab'), 'schedule');
+  assert.equal(await page.getByRole('tab', { name: '리셋 일정' }).getAttribute('aria-selected'), 'true');
+});
+
+test('reduced motion disables dashboard Web Animations API effects', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext({ reducedMotion: 'reduce' });
+  t.after(() => context.close());
+  await context.addInitScript(() => {
+    globalThis.__dashboardAnimations = 0;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) {
+      globalThis.__dashboardAnimations++;
+      return animate.apply(this, args);
+    };
+  });
+  const page = await openApp(t, { context });
+  await page.setViewportSize({ width: 375, height: 950 });
+  await selectTab(page, 'forecast');
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.equal(await page.evaluate(() => globalThis.__dashboardAnimations), 0);
+});
+
+for (const colorScheme of ['light', 'dark']) test(`${colorScheme} theme meets dashboard contrast targets`, async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext({ colorScheme });
+  t.after(() => context.close());
+  const page = await openApp(t, { context });
+  await page.setViewportSize({ width: 375, height: 950 });
+  await page.keyboard.press('Tab');
+  const ratios = await page.evaluate(() => {
+    const rgb = value => value.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel => channel / 255);
+    const luminance = value => rgb(value).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4)
+      .reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+    const contrast = (foreground, background) => {
+      const first = luminance(foreground); const second = luminance(background);
+      return (Math.max(first, second) + .05) / (Math.min(first, second) + .05);
+    };
+    const body = getComputedStyle(document.body);
+    const muted = getComputedStyle(document.querySelector('.muted'));
+    const button = getComputedStyle(document.querySelector('#refresh'));
+    return {
+      body: contrast(body.color, body.backgroundColor),
+      muted: contrast(muted.color, body.backgroundColor),
+      button: contrast(button.color, button.backgroundColor),
+      focus: contrast(button.outlineColor, body.backgroundColor),
+    };
+  });
+  assert.ok(ratios.body >= 4.5, `body contrast ${ratios.body}`);
+  assert.ok(ratios.muted >= 4.5, `muted contrast ${ratios.muted}`);
+  assert.ok(ratios.button >= 4.5, `button contrast ${ratios.button}`);
+  assert.ok(ratios.focus >= 3, `focus contrast ${ratios.focus}`);
+  await page.screenshot({ path: join(outputDir, `theme-${colorScheme}-375.png`), fullPage: true });
+});
+
+test('mobile controls meet target size and the primary dashboard fits the first viewport', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t);
+  await page.setViewportSize({ width: 375, height: 950 });
+  const layout = await page.evaluate(() => Object.fromEntries(['.page-header', '#main-status-card', '#dashboard-tabs'].map(selector => {
+    const rect = document.querySelector(selector).getBoundingClientRect();
+    return [selector, { top: rect.top, bottom: rect.bottom, height: rect.height }];
+  })));
+  assert.ok(layout['#dashboard-tabs'].bottom <= 950, `dashboard tabs should be visible in the first viewport: ${JSON.stringify(layout)}`);
+  await selectTab(page, 'alerts');
+  const sizes = await page.locator('#refresh, [role="tab"], #usage-alerts-toggle, #notifications-toggle').evaluateAll(elements => elements.map(element => ({ id: element.id, height: element.getBoundingClientRect().height })));
+  for (const size of sizes) assert.ok(size.height >= 44, `${size.id} target height ${size.height}px`);
+});
+
+test('tab and refreshed-value changes use the approved state animations', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const context = await browser.newContext({ reducedMotion: 'no-preference' });
+  t.after(() => context.close());
+  await context.addInitScript(() => {
+    globalThis.__dashboardAnimationDurations = [];
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      globalThis.__dashboardAnimationDurations.push(options?.duration);
+      return animate.call(this, keyframes, options);
+    };
+  });
+  const page = await openApp(t, { context });
+  await page.evaluate(() => { globalThis.__dashboardAnimationDurations = []; });
+  await selectTab(page, 'forecast');
+  const durations = await page.evaluate(() => globalThis.__dashboardAnimationDurations);
+  assert.ok(durations.includes(180), `tab indicator durations: ${durations}`);
+  assert.ok(durations.includes(200), `panel durations: ${durations}`);
+});
 
 test('usage dashboard renders percentages and reset times and preserves them on refresh failure', async t => {
   if (skipWithoutBrowser(t)) return;
@@ -155,12 +294,12 @@ test('missing usage and login changes clear the dashboard without inventing zero
     return n === 1 ? structuredClone(longSnapshot) : { ...longSnapshot, usageWindows: undefined };
   }, authState: () => signedOut ? 'signed-out' : 'chatgpt' });
   await page.locator('#refresh').click();
-  await page.waitForFunction(() => document.querySelector('#usage-five-hour .usage-percent')?.textContent === '—');
+  await page.waitForFunction(() => document.querySelector('#usage-five-hour .usage-percent')?.textContent === '확인 불가');
   assert.equal(await page.locator('#usage-five-hour progress').isVisible(), false);
   assert.match(await page.locator('#usage-five-hour .usage-reset').innerText(), /확인 불가/);
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#connection').textContent === '로그인 필요');
-  assert.equal(await page.locator('#usage-weekly .usage-percent').innerText(), '—');
+  assert.equal(await page.locator('#usage-weekly .usage-percent').innerText(), '확인 전');
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'not-ready');
 });
 
@@ -239,6 +378,7 @@ test('usage alert opt-in validates low allowance, persists, and avoids reload du
     reads++; return { ...longSnapshot, accountScope: 'synthetic-digest', usageWindows: [longSnapshot.usageWindows[1]] };
   } });
   assert.equal(reads, 1);
+  await selectTab(page, 'alerts');
   await page.locator('#usage-alerts-toggle').click();
   await page.waitForFunction(() => __usageNotices.length === 1);
   assert.equal(reads, 2);
@@ -262,6 +402,7 @@ test('usage reset alert uses a real requery and never promises restored permissi
   const page = await openApp(t, { context, clockTime: at * 1000, read: () => ({ ...longSnapshot, accountScope: 'synthetic-digest', ordinaryUsageAllowed: false,
     usageWindows: [{ ...longSnapshot.usageWindows[0], resetsAt: ++reads < 3 ? at + 60 : at + 18000 }],
   }) });
+  await selectTab(page, 'alerts');
   await page.locator('#usage-alerts-toggle').click(); await page.clock.runFor(10);
   await page.waitForFunction(() => __usageNotices.length === 1);
   await page.clock.runFor(60000);
@@ -282,6 +423,7 @@ test('forecast opt-in polls at five minutes, derives rates, and clears after opt
     ] };
   } });
   assert.equal(reads, 1);
+  await selectTab(page, 'forecast');
   await page.locator('#forecast-toggle').click();
   assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /1건/);
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
@@ -292,7 +434,7 @@ test('forecast opt-in polls at five minutes, derives rates, and clears after opt
   assert.match(await page.locator('#forecast-weekly .forecast-rate').innerText(), /12\.0%p/);
   assert.match(await page.locator('#forecast-five-hour .forecast-exhaustion').innerText(), /KST/);
   await page.locator('#forecast-toggle').click();
-  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '—');
+  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '계산 전');
   await page.clock.runFor(300000); assert.equal(reads, 3);
   await page.reload(); await page.waitForFunction(() => document.querySelector('#forecast-toggle')?.textContent === '추세 켜기');
   assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /0건/);
@@ -308,12 +450,13 @@ test('forecast hides stale extrapolation after failed polling and recovers on a 
       { ...longSnapshot.usageWindows[0], remainingPercent: 100 - (reads - 1) * 10, resetsAt: at + 18000 },
     ] };
   } });
+  await selectTab(page, 'forecast');
   await page.locator('#forecast-toggle').click();
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
   failed = true; await page.clock.runFor(300000);
   await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'stale');
-  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '—');
+  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '계산 전');
   failed = false; await page.clock.runFor(300000);
   await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
 });
@@ -327,6 +470,7 @@ test('forecast auto-retries after the first usage read fails despite ongoing emp
       { ...longSnapshot.usageWindows[0], resetsAt: at + 18000 },
     ] };
   } });
+  await selectTab(page, 'forecast');
   await page.locator('#forecast-toggle').click();
   await page.clock.runFor(300000);
   await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('1건'));
@@ -362,14 +506,14 @@ test('comparison suspends after a failed refresh, recovers, and clears on logout
   } });
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'refresh-needed');
-  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '—');
+  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '확인 불가');
   assert.match(await page.locator('#comparison-queried-at').innerText(), /KST/);
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'complete');
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'not-ready');
-  assert.equal(await page.locator('#comparison-queried-at').innerText(), '—');
-  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '—');
+  assert.equal(await page.locator('#comparison-queried-at').innerText(), '확인 전');
+  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '확인 불가');
 });
 
 test('comparison requires fresh reset times at the reset boundary instead of advancing by five hours', async t => {
@@ -381,7 +525,7 @@ test('comparison requires fresh reset times at the reset boundary instead of adv
   assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'complete');
   await page.clock.runFor(61000);
   assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'refresh-needed');
-  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '—');
+  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '확인 불가');
   assert.equal(reads, 1);
 });
 
@@ -440,6 +584,7 @@ for (const tabCount of [2, 3]) test(`${tabCount} visible tabs share simultaneous
     await page.clock.install({ time: new Date(at * 1000) }); await page.goto(first.url());
     await page.waitForFunction(() => document.querySelector('#notice').textContent === '조회가 완료되었습니다.');
   }
+  await Promise.all(pages.map(page => selectTab(page, 'forecast')));
   await Promise.all(pages.map(page => page.locator('#forecast-toggle').click()));
   const before = reads; block = true;
   await Promise.all(pages.map(page => page.clock.runFor(300000)));
@@ -471,6 +616,7 @@ test('manual refresh and another tab alert validation share one usage read', asy
   } });
   const second = await context.newPage(); t.after(() => second.close()); await second.goto(first.url());
   await second.waitForFunction(() => document.querySelector('#notice').textContent === '조회가 완료되었습니다.');
+  await selectTab(second, 'alerts');
   // Keep the first client manual-only while the second validates a notification.
   await first.evaluate(() => { Notification.permission = 'denied'; });
   const before = reads; block = true;
@@ -492,6 +638,7 @@ test('BFCache transitions preserve forecasts while real page exit clears them', 
       { ...longSnapshot.usageWindows[0], remainingPercent: 100 - index * 10, resetsAt: at + 18000 },
     ] };
   } });
+  await selectTab(page, 'forecast');
   await page.locator('#forecast-toggle').click();
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
@@ -554,6 +701,7 @@ test('usage panels expose busy and pressed state and live summaries without repe
   const panels = ['usage-panel', 'recommendation', 'start-time-comparison', 'usage-alerts', 'usage-forecast'];
   for (const id of panels) assert.equal(await page.locator(`#${id}`).getAttribute('aria-busy'), 'false');
   for (const id of ['notifications-toggle', 'usage-alerts-toggle', 'forecast-toggle']) {
+    await selectTab(page, id === 'forecast-toggle' ? 'forecast' : 'alerts');
     const toggle = page.locator(`#${id}`); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
     await toggle.click(); await page.waitForFunction(id => document.getElementById(id).getAttribute('aria-pressed') === 'true', id);
     await toggle.click(); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
@@ -593,7 +741,7 @@ test('reset and account boundaries announce once and clear old usage summaries',
   await page.clock.runFor(3000); assert.equal(await page.evaluate(() => __boundaryMutations), 0);
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('계정 상태가 변경'));
-  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '—');
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '확인 전');
 });
 
 test('forecast readiness and failure are announced on their state boundaries', async t => {
@@ -606,12 +754,13 @@ test('forecast readiness and failure are announced on their state boundaries', a
       { ...longSnapshot.usageWindows[0], remainingPercent: 100 - index * 10, resetsAt: at + 18000 },
     ] };
   } });
+  await selectTab(page, 'forecast');
   await page.locator('#forecast-toggle').click();
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('예상 소진 시각'));
   assert.match(await page.locator('#usage-announcement').textContent(), /5시간 추세/);
   await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'stale');
-  assert.match(await page.locator('#usage-announcement').textContent(), /추세.*조회 실패.*보류/);
+  assert.match(await page.locator('#usage-announcement').textContent(), /추세.*조회에 실패.*보류/);
 });
 
 test('notification storage failure is announced without raw errors or a pressed toggle', async t => {
@@ -626,6 +775,7 @@ test('notification storage failure is announced without raw errors or a pressed 
     };
   });
   const page = await openApp(t, { context, read: () => ({ ...longSnapshot, accountScope: 'error-scope' }) });
+  await selectTab(page, 'alerts');
   await page.locator('#usage-alerts-toggle').click();
   await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('사용량 알림:'));
   assert.match(await page.locator('#usage-announcement').textContent(), /저장소/);
@@ -668,6 +818,7 @@ test('an enabled expiry reminder shows delivery errors in both visible and live 
   const page = await openApp(t, { context, clockTime: at * 1000, read: () => ({ ...longSnapshot, queriedAt: at, accountScope: 'reminder-scope', credits: [
     { ...longSnapshot.credits[0], reminderKey: 'synthetic-key', grantedAt: at - 100, expiresAt: at + 3601 },
   ] }) });
+  await selectTab(page, 'alerts');
   await page.locator('#notifications-toggle').click();
   await page.clock.runFor(2000);
   await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('만료 알림:'));
@@ -698,9 +849,9 @@ test('empty, count-only, unavailable, refresh failure, and login-needed states r
   const cases = [
     ['count-only', () => ({ ...longSnapshot, availableCount: 3, detailState: 'count-only', credits: [] }), '3'],
     ['zero', () => ({ ...longSnapshot, availableCount: 0, detailState: 'complete', credits: [] }), '0'],
-    ['unavailable', () => ({ ...longSnapshot, availableCount: null, detailState: 'unavailable', credits: [] }), '—'],
+    ['unavailable', () => ({ ...longSnapshot, availableCount: null, detailState: 'unavailable', credits: [] }), '확인 불가'],
     ['refresh-error', n => { if (n > 1) throw new AppError('TIMEOUT'); return structuredClone(longSnapshot); }, '5'],
-    ['login-needed', () => { throw new AppError('LOGIN_REQUIRED'); }, '—'],
+    ['login-needed', () => { throw new AppError('LOGIN_REQUIRED'); }, '확인 전'],
   ];
   for (const [name, read, expected] of cases) {
     await t.test(name, async st => {
@@ -759,6 +910,7 @@ test('browser notification opt-in persists across reload in the same context', a
     Object.defineProperty(globalThis, 'Notification', { configurable: true, value: TestNotification });
   });
   const page = await openApp(t, { context });
+  await selectTab(page, 'alerts');
   const toggle = page.getByRole('button', { name: '알림 켜기', exact: true });
   assert.equal(await toggle.isDisabled(), false);
   await toggle.click();
@@ -833,6 +985,7 @@ test('notification preference restores after the browser context closes with per
   t.after(() => firstContext.close());
   await installNotification(firstContext);
   const first = await openApp(t, { context: firstContext });
+  await selectTab(first, 'alerts');
   await first.getByRole('button', { name: '알림 켜기', exact: true }).click();
   await first.getByRole('button', { name: '알림 끄기', exact: true }).waitFor();
   const url = first.url();
