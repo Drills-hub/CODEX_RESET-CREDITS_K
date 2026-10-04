@@ -230,7 +230,7 @@ footer { margin-top: 30px; padding: 22px 0 0; border-top: 1px solid var(--border
   .card-heading { display: none; }
   .card-heading h2 { font-size: 21px; }
   .timezone { padding-top: 4px; font-size: 11px; }
-  .usage { padding: 14px 0 16px; }
+  .usage { padding: 0 0 12px; }
   #usage-status { margin-bottom: 12px; font-size: 13px; }
   .usage[data-state="complete"] #usage-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
   .usage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
@@ -241,7 +241,7 @@ footer { margin-top: 30px; padding: 22px 0 0; border-top: 1px solid var(--border
   .usage-balance { gap: 5px; margin-bottom: 8px; }
   .usage-balance span, .usage-label, .usage-reset, .usage-remaining { font-size: 11px; }
   .usage-label { margin-top: 10px; }
-  .recommendation { margin-top: 14px; padding: 14px; }
+  .recommendation { margin-top: 12px; padding: 12px; }
   .recommendation h3 { margin-bottom: 6px; }
   .recommendation-title { margin-bottom: 5px; font-size: 17px; }
   #recommendation-reason { font-size: 13px; }
@@ -251,7 +251,7 @@ footer { margin-top: 30px; padding: 22px 0 0; border-top: 1px solid var(--border
   .usage-plan-compact { font-size: 11px; }
   .usage-plan-rate-settings { padding: 12px; }
   .usage-plan-metrics { grid-template-columns: 1fr; gap: 10px; }
-  .summary { grid-template-columns: 100px 1fr; gap: 14px; margin-top: 16px; padding-top: 16px; }
+  .summary { grid-template-columns: 100px 1fr; gap: 14px; margin-top: 12px; padding-top: 12px; }
   .balance strong { font-size: 36px; }
   .next-expiry { padding: 0 0 0 14px; border-top: 0; border-left: 1px solid var(--border); }
   #nearest { font-size: 13px; }

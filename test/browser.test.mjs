@@ -118,11 +118,13 @@ test('usage plan manual rate connects real engine, main summary and conditional 
   assert.match(await page.locator('#usage-plan-next-gap').innerText(), /48시간/);
   assert.match(await page.locator('#usage-plan-chart').innerText(), /100%.*가정/);
   assert.equal(await page.locator('#usage-plan-chart [data-segment-kind="scenario"]').count(), 1);
+  assert.equal(await page.locator('.recommendation-timing').isVisible(), false); // Exact target already shown by first review.
   await manualPlan(page, '160');
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-after-depletion');
   assert.match(await page.locator('#recommendation-reason').innerText(), /소진.*재조회/);
   assert.match(await page.locator('#usage-plan-first-use').innerText(), /2026-10-04 21:00:00/);
   assert.match(await planMetric(page, '소모량 출처'), /직접 입력/);
+  assert.equal(await page.locator('.recommendation-timing').isVisible(), true); // Target differs from earlier depletion review.
 });
 
 test('usage plan manual invalid values suppress action, retain across tabs and restore auto', async t => {
@@ -265,6 +267,77 @@ test('usage plan newly entered rate suspends immediately when its snapshot estim
   assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
 });
 
+test('usage plan rounded positive-balance depletion requires requery across arbitrary same-account inputs', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let reads = 0;
+  const page = await openApp(t, { clockTime: planAt * 1000, read: () => { reads++; return planSnapshot(); } });
+  await page.clock.runFor(20000);
+  await manualPlan(page, '1e20'); // Positive duration rounds back to queriedAt in Unix seconds.
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
+  for (const value of ['40', '', '0', '0.05']) {
+    await page.locator('#usage-plan-rate').fill(value);
+    assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+    assert.equal(await page.locator('#usage-plan-first-use').innerText(), '');
+    assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
+  }
+  await page.locator('[name="usage-plan-rate-mode"][value="auto"]').check();
+  await page.clock.runFor(1000);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /80%/);
+  assert.equal(reads, 1);
+});
+
+test('usage plan rounded depletion entered at query time remains suspended on cached ticks', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
+  await manualPlan(page, '1e20');
+  await page.clock.runFor(20000);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
+  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
+});
+
+test('usage plan true zero weekly balance retains immediate constrained credit review', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot({ remaining: 0 }) });
+  await page.clock.runFor(20000);
+  await manualPlan(page, '1e20');
+  for (const rate of ['1e20', '40']) {
+    await page.locator('#usage-plan-rate').fill(rate);
+    await page.clock.runFor(1000);
+    assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-after-depletion');
+    assert.match(await page.locator('#recommendation-title').innerText(), /즉시/);
+    assert.match(await page.locator('#recommendation-reason').innerText(), /주간.*0%.*제한/);
+    assert.doesNotMatch(await page.locator('#recommendation').innerText(), /지금 사용 가능|현재 사용 가능/);
+    assert.match(await page.locator('#usage-plan-first-use').innerText(), /2026-10-04 09:00:00/);
+  }
+});
+
+test('usage plan fresh read exactly at safe deadline retains immediate credit review', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const at = planAt + 82800;
+  const page = await openApp(t, { clockTime: at * 1000, read: () => planSnapshot({ at, remaining: 42 }) });
+  await manualPlan(page);
+  await page.clock.runFor(1000);
+  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-before-expiry');
+  assert.match(await page.locator('#usage-plan-summary').innerText(), /즉시 재조회/);
+  assert.match(await page.locator('#usage-plan-first-use').innerText(), /2026-10-05 08:00:00/);
+  assert.match(await page.locator('#usage-plan-leftover').innerText(), /42%/);
+  assert.match(await page.locator('#usage-plan-chart').innerText(), /즉시 재조회/);
+});
+
+test('usage plan event reference remains accurately labelled after wall clock advances', async t => {
+  if (skipWithoutBrowser(t)) return;
+  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
+  await page.clock.runFor(20000);
+  await manualPlan(page);
+  const event = page.locator('#usage-plan-chart .usage-plan-event-list li').first();
+  assert.match(await event.innerText(), /계산 기준 시각.*2026-10-04 09:00:00/s);
+  assert.doesNotMatch(await event.innerText(), /현재 시각/);
+  await page.clock.runFor(1000);
+  assert.match(await event.innerText(), /계산 기준 시각.*2026-10-04 09:00:00/s);
+});
+
 test('usage plan deadline continuity suspends old balance until a successful requery', async t => {
   if (skipWithoutBrowser(t)) return;
   let reads = 0;
@@ -312,6 +385,35 @@ test('usage plan elapsed-depletion entry after a clock jump suspends without a t
   assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
 });
 
+for (const theme of ['light', 'dark']) for (const mode of ['auto', 'manual']) {
+  test(`usage plan ${theme} ${mode} future-credit main and tabs fit first 950px`, async t => {
+    if (skipWithoutBrowser(t)) return;
+    const context = await browser.newContext({ colorScheme: theme, reducedMotion: 'reduce', viewport: { width: 375, height: 950 } });
+    t.after(() => context.close());
+    const page = await openApp(t, { context, clockTime: planAt * 1000, read: () => planSnapshot() });
+    if (mode === 'manual') await manualPlan(page);
+    await page.evaluate(() => scrollTo(0, 0));
+    const geometry = await page.evaluate(() => ({
+      bounds: Object.fromEntries(['#usage-five-hour', '#usage-weekly', '#recommendation', '#dashboard-tabs'].map(selector => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        return [selector, { top: rect.top, bottom: rect.bottom, height: rect.height }];
+      })),
+      controls: [...document.querySelectorAll('#refresh, [role="tab"], .usage-plan-rate-choice, #usage-plan-rate')].map(element => element.getBoundingClientRect().height),
+      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    }));
+    console.log(`Future-credit first viewport ${theme} ${mode}: ${JSON.stringify(geometry)}`);
+    await page.screenshot({ path: join(outputDir, `usage-plan-first-viewport-${theme}-${mode}.png`) });
+    for (const [selector, rect] of Object.entries(geometry.bounds)) {
+      assert.ok(rect.top >= 0 && rect.bottom <= 950, `${selector} must fit first viewport: ${JSON.stringify(geometry)}`);
+    }
+    assert.equal(geometry.overflow, false);
+    assert.ok(geometry.controls.every(height => height >= 44));
+    assert.match(await page.locator('#recommendation-reason').innerText(), /재조회/);
+    assert.match(await page.locator('#recommendation-reason').innerText(), /허용.*확인/);
+    assert.match(await page.locator('#usage-plan-chart').innerText(), /100%.*가정/);
+  });
+}
+
 for (const theme of ['light', 'dark']) for (const width of [320, 375, 768, 1280]) {
   test(`usage plan ${theme} ${width}px actual feature capture and accessible controls`, async t => {
     if (skipWithoutBrowser(t)) return;
@@ -319,6 +421,7 @@ for (const theme of ['light', 'dark']) for (const width of [320, 375, 768, 1280]
     t.after(() => context.close());
     const page = await openApp(t, { context, clockTime: planAt * 1000, read: () => planSnapshot() });
     await manualPlan(page);
+    await page.evaluate(() => scrollTo(0, 0));
     const geometry = await page.evaluate(() => ({
       overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       controls: [...document.querySelectorAll('.usage-plan-rate-choice, #usage-plan-rate')].map(element => element.getBoundingClientRect().height),

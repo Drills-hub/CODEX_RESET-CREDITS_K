@@ -29,6 +29,7 @@ const planView = createUsagePlanView(document.getElementById('usage-plan-chart')
 const planRate = document.getElementById('usage-plan-rate');
 const planModes = [...document.querySelectorAll('[name="usage-plan-rate-mode"]')];
 const planError = document.getElementById('usage-plan-input-error');
+const recommendationTiming = document.querySelector('.recommendation-timing');
 const planCompact = Object.fromEntries(['summary', 'first-use', 'leftover', 'next-gap'].map(key => [key, document.getElementById(`usage-plan-${key}`)]));
 const planNumber = new Intl.NumberFormat('ko-KR', { maximumSignificantDigits: 6 });
 let planMode = 'auto';
@@ -269,7 +270,11 @@ function usagePlan(snapshot, legacy) {
   const ratePerDay = planMode === 'manual' ? invalid ? null : manualRate : Number.isFinite(automaticRate) ? automaticRate : null;
   // Consumption stays anchored to the successful read. Real-time boundaries
   // suspend the old projection; they never advance its balance reference.
-  if (planCache?.snapshot === snapshot && planCache.plan.exhaustsAt > planCache.referenceNow && planCache.plan.exhaustsAt <= now) projectionExpiredSnapshot = snapshot;
+  const positiveWeeklyBalance = snapshot?.usageWindows?.some(row => row.kind === 'weekly' && row.remainingPercent > 0);
+  // A positive balance can round its exhaustion back to the reference second.
+  // A truly empty balance instead keeps the immediate, constrained credit review.
+  if (positiveWeeklyBalance && planCache?.snapshot === snapshot && Number.isFinite(planCache.plan.exhaustsAt)
+    && planCache.plan.exhaustsAt >= planCache.referenceNow && planCache.plan.exhaustsAt <= now) projectionExpiredSnapshot = snapshot;
   const suspended = ['not-ready', 'refreshing', 'refresh-needed', 'server-restricted', 'incomplete'].includes(legacy.code);
   const boundary = [...(snapshot?.credits ?? []).flatMap(row => row.expiryState === 'known' ? [row.expiresAt - 3600, row.expiresAt] : []),
     ...(snapshot?.usageWindows ?? []).map(row => row.resetsAt)].filter(at => Number.isFinite(at) && at <= now && at >= snapshot?.queriedAt).sort((a, b) => a - b).at(-1);
@@ -281,7 +286,8 @@ function usagePlan(snapshot, legacy) {
     let plan = buildUsagePlan(snapshot, { now: referenceNow, refreshing: state.loading,
       stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' || expiredProjection,
       ratePerDay, rateSource: planMode });
-    if (plan.state === 'ready' && plan.exhaustsAt > referenceNow && plan.exhaustsAt <= now) {
+    if (positiveWeeklyBalance && plan.state === 'ready' && Number.isFinite(plan.exhaustsAt)
+      && plan.exhaustsAt >= referenceNow && plan.exhaustsAt <= now) {
       projectionExpiredSnapshot = snapshot;
       plan = buildUsagePlan(snapshot, { now, stale: true, rateSource: planMode });
     }
@@ -316,13 +322,29 @@ function renderRecommendation(snapshot) {
   const recommendation = plan.firstCredit || ['invalid-rate', 'refresh-needed'].includes(plan.code) || projectionExpiredSnapshot === snapshot && snapshot ? plan : legacy;
   planView.update(plan);
   const readyPlan = plan.state === 'ready' && plan.firstCredit !== null;
-  setText(planCompact.summary, readyPlan ? `주간 목표까지 필요한 소모량: ${plan.requiredRatePerDay === null ? '즉시 재조회 필요' : `${planNumber.format(plan.requiredRatePerDay)} %p/일`}` : '');
-  setText(planCompact['first-use'], readyPlan && plan.firstUseAt !== null ? `${plan.ratePerDay === null ? '첫 리셋권 안전 마감 (소진 예상 아님)' : '첫 리셋권 사용 검토'}: ${formatKst(Math.floor(plan.firstUseAt))}` : '');
-  setText(planCompact.leftover, readyPlan && plan.remainingAtTarget !== null ? `목표 시점 예상 잔여: ${planNumber.format(plan.remainingAtTarget)}%` : '');
-  setText(planCompact['next-gap'], readyPlan && plan.nextGapSeconds !== null ? `첫 사용 검토 → 다음 안전 마감: ${planNumber.format(plan.nextGapSeconds / 3600)}시간` : '');
+  setText(planCompact.summary, readyPlan ? `필요 소모량: ${plan.requiredRatePerDay === null ? '즉시 재조회 필요' : `${planNumber.format(plan.requiredRatePerDay)} %p/일`}` : '');
+  setText(planCompact['first-use'], readyPlan && plan.firstUseAt !== null ? `${plan.ratePerDay === null ? '안전 마감 (소진 예상 아님)' : '첫 리셋권 검토'}: ${formatKst(Math.floor(plan.firstUseAt))}` : '');
+  setText(planCompact.leftover, readyPlan && plan.remainingAtTarget !== null ? `목표 예상 잔여: ${planNumber.format(plan.remainingAtTarget)}%` : '');
+  setText(planCompact['next-gap'], readyPlan && plan.nextGapSeconds !== null ? `첫 검토 → 다음 안전 마감: ${planNumber.format(plan.nextGapSeconds / 3600)}시간` : '');
+  // The compact first-credit row already gives this exact target time.
+  // Keep the separate target whenever depletion review and the target differ.
+  recommendationTiming.hidden = readyPlan && plan.firstUseAt === plan.targetAt;
+  let title = recommendation.title;
+  let reason = recommendation.reason;
+  // Main shows the same plan's decision and constraints; schedule retains its full explanation.
+  if (readyPlan && plan.firstCredit.deadlineAt > plan.queriedAt
+    && snapshot.usageWindows.every(row => row.remainingPercent > 0)
+    && ['credit-deadline', 'credit-before-expiry', 'credit-after-depletion'].includes(plan.code)) {
+    title = plan.ratePerDay === null ? '첫 리셋권 안전 마감을 확인하세요.' : '잔여 활용 후 첫 리셋권을 검토하세요.';
+    reason = plan.code === 'credit-deadline' ? '만료 1시간 전 재조회 후 검토하세요. 소진 예상은 없습니다.'
+      : plan.code === 'credit-after-depletion' ? '주간 소진 후 재조회하고 첫 리셋권을 검토하세요.'
+      : `안전 마감에 재조회 후 검토하세요. 예상 잔여 ${planNumber.format(plan.remainingAtTarget)}%를 포기할 수 있습니다.`;
+    if (plan.coverage === 'partial') reason = `조회된 항목 중 ${reason}`;
+    reason += snapshot.ordinaryUsageAllowed === true ? ' 5시간 한도를 확인하세요.' : ' 5시간 한도·사용 허용을 확인한 경우에만 활용하세요.';
+  }
   elements.recommendation.dataset.code = recommendation.code;
-  setText(elements['recommendation-title'], recommendation.title, { emphasize: true });
-  elements['recommendation-reason'].textContent = recommendation.reason;
+  setText(elements['recommendation-title'], title, { emphasize: true });
+  elements['recommendation-reason'].textContent = reason;
   setText(elements['recommendation-target'], recommendation.targetAt === null ? snapshot ? '해당 없음' : '확인 전' : formatKst(recommendation.targetAt), { emphasize: true });
   elements['recommendation-remaining'].textContent = recommendation.targetAt === null ? '' : remainingTime(recommendation.targetAt);
   elements['recommendation-queried-at'].textContent = snapshot ? formatKst(snapshot.queriedAt) : '확인 전';

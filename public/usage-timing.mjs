@@ -82,7 +82,7 @@ export function buildUsagePlan(snapshot, {
     events: [], segments: [], warnings: [],
   };
   if (Number.isFinite(now) && now >= 0) {
-    plan.events.push({ kind: 'now', at: now, label: '현재 시각', creditNumber: null, assumed: false });
+    plan.events.push({ kind: 'now', at: now, label: '계산 기준 시각', creditNumber: null, assumed: false });
   }
   if (suspended) return plan;
 

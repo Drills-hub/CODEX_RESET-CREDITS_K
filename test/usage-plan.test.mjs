@@ -60,6 +60,14 @@ test('depletion before the safety deadline uses depletion and the actual next de
   ]);
 });
 
+test('now event describes the calculation reference without claiming live wall clock time', () => {
+  const result = plan(snapshot(), { ratePerDay: 40 });
+  assert.deepEqual(result.events.find(event => event.kind === 'now'), {
+    kind: 'now', at: now, label: '계산 기준 시각', creditNumber: null, assumed: false,
+  });
+  assert.equal(result.exhaustsAt, now + 108000);
+});
+
 test('slow depletion stops at the deadline and explains allowance sacrificed', () => {
   const result = plan(snapshot(), { ratePerDay: 10, rateSource: 'manual' });
   assert.equal(result.exhaustsAt, now + 5 * day);
