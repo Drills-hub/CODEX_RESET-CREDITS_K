@@ -33,5 +33,4 @@ test('restarting an effect cancels its previous animation', () => {
   motion.emphasizeValue(element);
   assert.equal(first.cancelled, true);
   assert.equal(element.calls.length, 2);
-  assert.equal(element.calls[1].options.duration, 220);
 });

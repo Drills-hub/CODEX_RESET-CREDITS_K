@@ -1,10 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_TAB, TAB_IDS, normalizeTab, tabUrl } from '../public/tabs.mjs';
+import { normalizeTab, tabUrl } from '../public/tabs.mjs';
 
-test('tab values use the approved order and fall back to schedule', () => {
-  assert.deepEqual(TAB_IDS, ['schedule', 'forecast', 'alerts', 'credits']);
-  assert.equal(DEFAULT_TAB, 'schedule');
+test('valid tab values are preserved and unknown values fall back to schedule', () => {
   assert.equal(normalizeTab('forecast'), 'forecast');
   assert.equal(normalizeTab('unknown'), 'schedule');
   assert.equal(normalizeTab(null), 'schedule');

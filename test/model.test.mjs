@@ -21,20 +21,34 @@ test('summary unavailable differs from zero and count-only data', () => {
   assert.equal(only.detailState, 'count-only');
   assert.equal(only.availableCount, 3);
   assert.match(emptyMessage(only), /상세 정보가 제공되지 않았/);
+  const missingDetails = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 2 } });
+  assert.equal(missingDetails.detailState, 'count-only');
+  assert.equal(missingDetails.availableCount, 2);
 });
-test('required rate-limit envelope is validated while optional reset details remain unavailable', () => {
-  for (const result of [{}, { rateLimits: null }, { rateLimits: [] }, { rateLimits: 'bad' }]) {
+test('malformed rate-limit envelopes and reset-credit field types are rejected', () => {
+  for (const result of [null, undefined, [], 'bad', 1, false, {}, { rateLimits: null }, { rateLimits: [] }, { rateLimits: 'bad' }]) {
     assert.throws(() => normalizeCredits(result), error => error.code === 'INCOMPATIBLE');
   }
-  assert.equal(normalizeCredits({ rateLimits: {} }).detailState, 'unavailable');
-  assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: null }).detailState, 'unavailable');
+  for (const summary of [[], 'bad', 1, false]) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: summary }), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const availableCount of [undefined, null, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1']) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount } }), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const credits of ['', 0, {}, true]) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits } }), error => error.code === 'INCOMPATIBLE');
+  }
+  for (const row of [null, [], new Date(0), Object.assign(Object.create({ inherited: true }), { title: 'bad' })]) {
+    assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [row] } }), error => error.code === 'INCOMPATIBLE');
+  }
+  assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 10001, credits: Array(10001).fill({}) } }), error => error.code === 'INVALID_DATA');
 });
 test('sorts known expirations first, preserves null versus missing, strips sensitive fields', () => {
   const snapshot = normalizeCredits({
-    accountId: 'SECRET_ACCOUNT', accessToken: 'SECRET_TOKEN',
+    accountId: 'SECRET_ACCOUNT', accessToken: 'SECRET_TOKEN', ignored: 'SECRET_EXTRA',
     rateLimits: {},
-    rateLimitResetCredits: { availableCount: 5, credits: [
-      { id: 'SECRET_CREDIT', title: '<img src=x onerror=alert(1)>', status: 'available', grantedAt: 10, expiresAt: 500 },
+    rateLimitResetCredits: { availableCount: 5, extra: 'SECRET_SUMMARY', credits: [
+      { id: 'SECRET_CREDIT', title: '<img src=x onerror=alert(1)>', status: 'available', grantedAt: 10, expiresAt: 500, secret: 'SECRET_ROW' },
       { id: 'x', status: 'available', grantedAt: 10, expiresAt: null },
       { id: 'y', status: 'available', grantedAt: 10 },
       { id: 'z', status: 'available', grantedAt: 10, expiresAt: 100 },
@@ -56,7 +70,15 @@ test('invalid timestamps and unknown statuses fail safely', () => {
   assert.equal(s.credits[0].expiryState, 'unknown');
   assert.equal(s.credits[0].status, 'unknown');
   assert.equal(s.credits[1].expiryState, 'unknown');
-  assert.throws(() => normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: -1 } }, 0), error => error.code === 'INCOMPATIBLE');
+  const defaulted = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [
+    { status: 'future-status', expiresAt: null, grantedAt: 'bad' },
+  ] } }, 1000);
+  assert.deepEqual(defaulted.credits, [{ number: 1, title: '리셋권', status: 'unknown', grantedAt: null, expiresAt: null, expiryState: 'none' }]);
+  const invalidTimes = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [
+    { expiresAt: 'bad', grantedAt: -1 },
+  ] } });
+  assert.equal(invalidTimes.credits[0].expiryState, 'unknown');
+  assert.equal(invalidTimes.credits[0].grantedAt, null);
 });
 
 test('stable reminder keys distinguish identical display rows without exposing raw IDs', () => {
