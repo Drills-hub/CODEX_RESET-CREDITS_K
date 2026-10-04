@@ -48,7 +48,7 @@ test('normalization preserves unavailable, count-only, unknown timestamps/status
   assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 2 } }).detailState, 'count-only');
   assert.equal(normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: null } }).detailState, 'count-only');
   const result = normalizeCredits({ ignored: 'secret', rateLimits: {}, rateLimitResetCredits: { availableCount: 1, extra: 'ignored', credits: [{ status: 'future-status', expiresAt: null, grantedAt: 'bad', secret: 'ignored' }] } }, 1000);
-  assert.deepEqual(result.credits, [{ number: 1, title: '리셋권', status: 'unknown', grantedAt: null, expiresAt: null, expiryState: 'none' }]);
+  assert.deepEqual(result.credits, [{ number: 1, title: '리셋권', status: 'unknown', resetType: 'unknown', grantedAt: null, expiresAt: null, expiryState: 'none' }]);
   const invalidTimes = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [{ expiresAt: 'bad', grantedAt: -1 }] } });
   assert.equal(invalidTimes.credits[0].expiryState, 'unknown');
   assert.equal(invalidTimes.credits[0].grantedAt, null);
