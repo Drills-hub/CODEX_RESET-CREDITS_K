@@ -152,7 +152,7 @@ export function simulateUsage(snapshot, workSlots, redemptions, {
       else {
         const r = chosen.find(r => r.number === e.creditNumber);
         rescued++;
-        if (result.firstUseAt === null) { result.firstUseAt = at; result.metrics.firstRemainingPercent = weekly; }
+        if (e.creditNumber === credits[0].number) { result.firstUseAt = at; result.metrics.firstRemainingPercent = weekly; }
         else { result.nextUseAt = at; result.metrics.nextRemainingPercent = weekly; }
         if (r.credit.resetType !== 'codexRateLimits') {
           result.state = 'uncertain';
@@ -198,11 +198,13 @@ function comparePrimary(a, b) {
   }
   return 0;
 }
-const compare = (a, b) => comparePrimary(a, b) || (b.firstUseAt ?? -1) - (a.firstUseAt ?? -1);
+const reviewAt = r => r.firstUseAt ?? r.nextUseAt ?? null;
+const compare = (a, b) => comparePrimary(a, b) || (reviewAt(b) ?? -1) - (reviewAt(a) ?? -1);
 export function chooseRedemptionPlan(results) {
   if (!Array.isArray(results)) return null;
   const valid = results.filter(r => r?.state === 'ready' && timestamp(r.horizonAt)
     && (r.firstUseAt === null || timestamp(r.firstUseAt))
+    && (r.nextUseAt === undefined || r.nextUseAt === null || timestamp(r.nextUseAt))
     && ['totalUsedPercent', 'totalDiscardedPercent', 'expiredCredits'].every(k => Number.isFinite(r.metrics?.[k]) && r.metrics[k] >= 0));
   const reference = r => r.events?.find(e => e.kind === 'now')?.at ?? null;
   if (!valid.length || valid.some(r => r.horizonAt !== valid[0].horizonAt || reference(r) !== reference(valid[0]))) return null;
@@ -248,6 +250,7 @@ export function buildWorkSchedulePlan(snapshot, {
     nextRemainingPercent: null, events: [], segments: [] });
   const schedule = plan.schedule = {
     recommendedStart: null, recommendedEnd: null, lastSafeAt: null, nextUseAt: null,
+    reviewCreditNumber: null, reviewRemainingPercent: null,
     totalUsedPercent: null, totalDiscardedPercent: null, firstRemainingPercent: null,
     expiredCredits: null, blockedWorkHours: null, weeklyPerHour: null, fiveHourPerHour: null,
     rateSource: rateSource === 'manual' ? 'manual' : 'auto', workSlots: [], accessSlots: [],
@@ -288,40 +291,48 @@ export function buildWorkSchedulePlan(snapshot, {
   if (baseline.state !== 'ready') return incomplete('한도·작업 소모율의 단위와 범위를 확인하고 최신 상태를 재조회하세요.');
   schedule.assumptions.push(`계산 범위: Unix 초 ${now}부터 ${baseline.horizonAt}까지 입력된 전체 작업과 마지막 안전 마감을 포함합니다.`);
   const firstTimes = first ? candidateTimes(schedule.accessSlots, now, first.deadlineAt, 64, depletionTimes(baseline)) : [];
+  const nextOnlyTimes = next ? candidateTimes(schedule.accessSlots, now, next.deadlineAt, 32, depletionTimes(baseline)) : [];
   schedule.lastSafeAt = firstTimes.at(-1) ?? null;
   let selected = baseline, results = [], rows = [];
   // Unknown effects are reviewed provisionally, never scored as invented refills.
-  if (first && firstTimes.length && credits.some(c => c.resetType !== 'codexRateLimits')) {
-    rows = [{ number: first.number, at: schedule.lastSafeAt }];
+  const provisional = firstTimes.length && credits.some(c => c.resetType !== 'codexRateLimits') ? first
+    : !firstTimes.length && nextOnlyTimes.length && next.resetType !== 'codexRateLimits' ? next : null;
+  if (provisional) {
+    const times = provisional === first ? firstTimes : nextOnlyTimes;
+    const at = times.at(-1);
+    rows = [{ number: provisional.number, at }];
     selected = simulate(rows);
     if (selected.state === 'ready') {
       // Even if only the next effect is unknown, do not present a complete optimized plan.
-      selected = { ...selected, state: 'uncertain', segments: selected.segments.filter(s => s.toAt <= selected.firstUseAt),
+      selected = { ...selected, state: 'uncertain', segments: selected.segments.filter(s => s.toAt <= at),
         metrics: { ...selected.metrics,
         totalUsedPercent: null, totalDiscardedPercent: null, blockedWorkHours: null } };
     }
-    plan.warnings.push('리셋권 효과를 확인할 수 없어 첫 안전 마감 검토만 잠정 안내하며 전체 최적화와 이후 수치를 보류합니다.');
-    const interval = schedule.accessSlots.find(s => schedule.lastSafeAt >= s.startAt && schedule.lastSafeAt <= s.endAt);
-    schedule.recommendedStart = firstTimes.find(t => t >= interval.startAt); schedule.recommendedEnd = schedule.lastSafeAt;
-    plan.title = '첫 리셋권을 잠정 재조회·검토하세요.';
-    plan.reason = '접속 가능한 첫 마감 구간의 잠정 안내입니다. 효과 미확인으로 전체 사용 계획을 최적화할 수 없습니다.';
+    plan.warnings.push('리셋권 효과를 확인할 수 없어 접속 가능한 안전 마감 검토만 잠정 안내하며 전체 최적화와 이후 수치를 보류합니다.');
+    const interval = schedule.accessSlots.find(s => at >= s.startAt && at <= s.endAt);
+    schedule.recommendedStart = times.find(t => t >= interval.startAt); schedule.recommendedEnd = at;
+    plan.title = `${provisional.number}번 리셋권을 잠정 재조회·검토하세요.`;
+    plan.reason = '접속 가능한 마감 구간의 잠정 안내입니다. 효과 미확인으로 전체 사용 계획을 최적화할 수 없습니다.';
   } else {
     for (const at of firstTimes) {
       const firstRows = [{ number: first.number, at }], firstResult = simulate(firstRows);
       results.push(firstResult);
       if (!next) continue;
-      // 64 * (1 + 30) + baseline + 3 sensitivities <= 2048 actual simulations.
+      // baseline + 64*(1+30) + 32 second-only + 2 sensitivities = 2019 <= 2048.
       const secondTimes = candidateTimes(schedule.accessSlots, at + 1, next.deadlineAt, 30, depletionTimes(firstResult));
       for (const secondAt of secondTimes) results.push(simulate([...firstRows, { number: next.number, at: secondAt }]));
     }
-    selected = chooseRedemptionPlan(results.length ? results : [baseline]);
+    for (const at of nextOnlyTimes) results.push(simulate([{ number: next.number, at }]));
+    selected = chooseRedemptionPlan([...results, baseline]);
     if (!selected) return incomplete('동일 계산 범위의 유효한 후보를 비교할 수 없습니다. 입력을 확인하세요.');
-    const interval = schedule.accessSlots.find(s => selected.firstUseAt >= s.startAt && selected.firstUseAt <= s.endAt);
-    const equivalent = results.filter(r => r.state === 'ready' && comparePrimary(r, selected) === 0 && r.firstUseAt !== null
-      && interval && r.firstUseAt >= interval.startAt && r.firstUseAt <= interval.endAt);
+    const at = reviewAt(selected);
+    const interval = at === null ? null : schedule.accessSlots.find(s => at >= s.startAt && at <= s.endAt);
+    const equivalent = results.filter(r => r.state === 'ready' && comparePrimary(r, selected) === 0
+      && (r.firstUseAt === null) === (selected.firstUseAt === null) && reviewAt(r) !== null
+      && interval && reviewAt(r) >= interval.startAt && reviewAt(r) <= interval.endAt);
     if (equivalent.length) {
-      schedule.recommendedStart = Math.min(...equivalent.map(r => r.firstUseAt));
-      schedule.recommendedEnd = Math.max(...equivalent.map(r => r.firstUseAt));
+      schedule.recommendedStart = Math.min(...equivalent.map(reviewAt));
+      schedule.recommendedEnd = Math.max(...equivalent.map(reviewAt));
     }
     rows = selected.events.filter(e => e.kind === 'credit-use').map(e => ({ number: e.creditNumber, at: e.at }));
     schedule.candidates = [...results].filter(r => r.state === 'ready').sort(compare).slice(0, 8)
@@ -336,10 +347,19 @@ export function buildWorkSchedulePlan(snapshot, {
     plan.title = first ? '작업·접속 일정에 맞춰 리셋권을 재조회·검토하세요.' : '현재 잔여량과 자연 리셋을 확인하세요.';
     plan.reason = first ? '평가한 후보 중 만료 위험, 총 활용량, 버릴 주간 잔여량을 비교한 가정의 추천 구간입니다.'
       : '계획 가능한 날짜가 있는 리셋권이 없어 현재 사용량을 자연 리셋까지 계산합니다. 복구는 재조회로 확인하세요.';
-    if (first && !firstTimes.length) {
-      plan.title = '첫 리셋권의 안전 마감 전 접속이 어렵습니다.';
-      plan.reason = '안전 마감 전 접속 가능한 구간이 없습니다. 첫 리셋권을 검토했다고 가정하지 않으며 만료 위험이 있습니다.';
-    }
+  }
+  const recommendedReview = selected.events.find(e => e.kind === 'credit-use');
+  if (recommendedReview) {
+    const recommendedCredit = recommendedReview.creditNumber === first?.number ? first : next;
+    schedule.reviewCreditNumber = recommendedCredit.number;
+    schedule.reviewRemainingPercent = recommendedCredit === first ? selected.metrics.firstRemainingPercent : selected.metrics.nextRemainingPercent;
+    schedule.lastSafeAt = candidateTimes(schedule.accessSlots, now, recommendedCredit.deadlineAt, 32).at(-1) ?? null;
+    plan.targetAt = recommendedCredit.deadlineAt;
+  }
+  if (first && !firstTimes.length) {
+    const secondCopy = recommendedReview ? ` ${next.number}번 리셋권만 접속 가능한 구간에서 재조회 후 검토하도록 제안합니다.` : '';
+    plan.title = recommendedReview ? `${next.number}번 리셋권의 검토 구간을 확인하세요.` : '첫 리셋권의 안전 마감 전 접속이 어렵습니다.';
+    plan.reason = `첫 안전 마감 전 접속 가능한 구간이 없습니다. 첫 리셋권을 검토했다고 가정하지 않으며 만료 위험이 있습니다.${secondCopy} ${plan.reason}`;
   }
   Object.assign(schedule, { nextUseAt: selected.nextUseAt, totalUsedPercent: selected.metrics.totalUsedPercent,
     totalDiscardedPercent: selected.metrics.totalDiscardedPercent, firstRemainingPercent: selected.metrics.firstRemainingPercent,
