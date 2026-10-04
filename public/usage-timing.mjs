@@ -69,7 +69,7 @@ export function buildUsagePlan(snapshot, {
   const validWindows = Array.isArray(snapshot?.usageWindows)
     && snapshot.usageWindows.every(row => row && typeof row === 'object');
   const advice = recommendUsage(snapshot && !validWindows ? { ...snapshot, usageWindows: [] } : snapshot,
-    { now: now * 1000, stale, refreshing });
+    { now: Number.isFinite(now) ? now * 1000 : NaN, stale, refreshing });
   const suspended = PLAN_SUSPENSIONS.has(advice.code);
   const plan = {
     state: suspended ? advice.code : 'ready', code: advice.code, title: advice.title, reason: advice.reason,
@@ -111,7 +111,7 @@ export function buildUsagePlan(snapshot, {
   if (detailed && credits.some(row => row?.status === 'available' && !knownExpiry(row))) {
     plan.warnings.push('만료 시각을 확인할 수 없는 리셋권은 일정에서 제외했습니다.');
   }
-  if (five.remainingPercent === 0) plan.warnings.push('5시간 잔여량이 0%라 일반 사용이 제한될 수 있습니다. 리셋 후 재조회하세요.');
+  if (five.remainingPercent === 0) plan.warnings.push('5시간 잔여량이 0%라 일반 사용이 제한될 수 있습니다. 최신 상태를 재조회하고 실제 사용 허용 여부를 확인하세요.');
   else plan.warnings.push('주간 소모량 예상과 별도로 5시간 한도의 제한을 확인하세요. 반복 리셋이나 지속 사용을 보장하지 않습니다.');
   if (weekly.remainingPercent === 0) plan.warnings.push('주간 잔여량이 0%라 일반 사용이 제한될 수 있습니다. 재조회 후 리셋권 사용 여부를 검토하세요.');
   if (snapshot.ordinaryUsageAllowed !== true) plan.warnings.push('실제 사용 허용 여부를 확인한 경우에만 실행할 수 있는 조건부 계획입니다.');
@@ -171,9 +171,21 @@ export function buildUsagePlan(snapshot, {
     plan.reason = `${coverage === 'partial' ? '조회된 항목 중 ' : ''}첫 리셋권 안전 마감보다 주간 리셋이 먼저이거나 같습니다. 리셋 시각에 재조회하고 리셋권 필요 여부를 판단하세요.`;
   }
   if (five.remainingPercent === 0 || weekly.remainingPercent === 0) {
-    const naturalResetReason = plan.code === 'natural-reset-first' ? ` ${plan.reason}` : '';
-    plan.title = '소진된 한도를 재조회하고 리셋권 필요 여부를 검토하세요.';
-    plan.reason = `${advice.reason} 재조회로 실제 잔여량과 사용 허용 여부를 확인하세요.${naturalResetReason}${first && !naturalResetReason ? ` ${coverage === 'partial' ? '조회된 항목 중 ' : ''}리셋권 사용 검토 시각은 일정과 소모량 가정이며 일반 사용 허용을 뜻하지 않습니다.` : ''}`;
+    const depleted = [five, weekly].filter(row => row.remainingPercent === 0);
+    const restriction = `${depleted.map(row => row.kind === 'five-hour' ? '5시간' : '주간').join('·')} 잔여량이 0%라 일반 사용이 제한될 수 있습니다. 재조회로 실제 잔여량과 사용 허용 여부를 확인하세요.`;
+    if (first && plan.firstUseAt === now) {
+      plan.title = '첫 리셋권을 즉시 재조회하고 사용 여부를 검토하세요.';
+      plan.reason = `${coverage === 'partial' ? '조회된 항목 중 ' : ''}첫 리셋권 ${rate === null ? '안전 마감' : '검토 시각'}이 현재이므로 즉시 재조회하고 첫 리셋권 사용 여부를 검토하세요.`;
+      if (plan.remainingAtTarget !== null && plan.remainingAtTarget > 0) plan.reason += ` 예상 잔여 ${plan.remainingAtTarget}%를 포기할 수 있습니다.`;
+      if (rate === null) plan.reason += ' 소진 예상 시각은 확인할 수 없습니다.';
+      plan.reason += ` ${restriction}`;
+    } else if (first) {
+      if (plan.firstUseAt !== null) plan.title = '사용 제한과 첫 리셋권 안전 마감을 함께 확인하세요.';
+      plan.reason = `${restriction} 실제 사용이 허용되는 경우에만 다음 계획을 활용하세요. ${plan.reason}`;
+    } else {
+      plan.title = '소진된 한도를 재조회하세요.';
+      plan.reason = `${advice.reason} ${restriction}`;
+    }
   }
   if (snapshot.ordinaryUsageAllowed !== true) plan.reason += ' 실제 사용이 허용되는지 확인한 경우에만 활용하세요.';
   for (const row of [first, next]) {

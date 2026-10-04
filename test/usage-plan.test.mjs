@@ -351,3 +351,52 @@ test('default now is converted to seconds and legacy advice remains milliseconds
   assert.equal(result.targetAt, now + day);
   assert.equal(timing.recommendUsage(snapshot(), { now }).code, 'refresh-needed');
 });
+
+test('non-numeric now suspends projections before any millisecond coercion', () => {
+  for (const invalidNow of ['1800000000', 1800000000n, new Number(now),
+    { valueOf: () => now }, Symbol('now'), null, true]) {
+    const result = plan(snapshot(), { now: invalidNow, ratePerDay: 10 });
+    assert.equal(result.state, 'refresh-needed');
+    for (const key of ['targetAt', 'requiredRatePerDay', 'exhaustsAt', 'remainingAtTarget',
+      'firstUseAt', 'nextGapSeconds', 'nextRequiredRatePerDay', 'nextRemainingPercent', 'firstCredit', 'nextCredit']) {
+      assert.equal(result[key], null, key);
+    }
+    assert.deepEqual(result.events, []);
+    assert.deepEqual(result.segments, []);
+  }
+});
+
+test('five-hour exhaustion with expiry in thirty minutes keeps immediate review and sacrificed balance', () => {
+  const result = plan(snapshot({ five: 0, fiveIn: 7200, credits: [credit(1, -1800)] }), { ratePerDay: 10 });
+  assert.equal(result.state, 'ready');
+  assert.equal(result.firstUseAt, now);
+  assert.equal(result.remainingAtTarget, 50);
+  assert.match(result.title, /즉시/);
+  assert.match(result.reason, /즉시.*재조회.*리셋권.*검토/);
+  assert.match(result.reason, /50%.*포기/);
+  assert.match(result.reason, /5시간.*0%.*제한/);
+  assert.doesNotMatch(result.reason, /리셋 시각 이후/);
+  assert.doesNotMatch(result.title + result.reason, /지금 사용 가능|현재 사용 가능/);
+});
+
+test('five-hour exhaustion keeps later credit deadline and leftover advice conditional', () => {
+  const result = plan(snapshot({ five: 0 }), { ratePerDay: 10 });
+  assert.equal(result.firstUseAt, now + day);
+  assert.equal(result.remainingAtTarget, 40);
+  assert.match(result.reason, /안전 마감/);
+  assert.match(result.reason, /40%.*포기/);
+  assert.match(result.reason, /허용.*경우/);
+  assert.match(result.reason, /5시간.*0%.*제한/);
+});
+
+test('without a rate an immediate credit deadline is retained despite both depleted windows', () => {
+  const result = plan(snapshot({ five: 0, weekly: 0, detailState: 'partial', credits: [credit(1, -1800)] }));
+  assert.equal(result.firstUseAt, now);
+  assert.equal(result.exhaustsAt, null);
+  assert.match(result.title, /즉시/);
+  assert.match(result.reason, /안전 마감/);
+  assert.match(result.reason, /즉시.*재조회.*리셋권.*검토/);
+  assert.match(result.reason, /조회된 항목 중/);
+  assert.match(result.reason, /소진 예상.*확인할 수 없/);
+  assert.doesNotMatch(result.reason, /리셋 시각 이후/);
+});
