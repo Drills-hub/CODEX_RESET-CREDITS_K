@@ -22,6 +22,25 @@ function locksHarness() {
   } };
 }
 const snapshot = { queriedAt: 100, revision: 1, accountScope: 'digest', usageWindows: [] };
+
+test('direct and peer reads retain only safe normalized credit reset types', async t => {
+  const value = { ...snapshot, credits: ['codexRateLimits', 'other', undefined, { secret: 'PRIVATE' }].map((resetType, index) => ({
+    number: index + 1, title: 'credit', resetType, rawId: 'PRIVATE', token: 'PRIVATE',
+  })) };
+  const direct = createUsageReadCoordinator({ read: async () => value });
+  const locks = locksHarness(); const BroadcastChannel = broadcastHarness();
+  let reads = 0;
+  const read = async () => { reads++; await new Promise(resolve => setImmediate(resolve)); return value; };
+  const owner = createUsageReadCoordinator({ locks, BroadcastChannel, read });
+  const peer = createUsageReadCoordinator({ locks, BroadcastChannel, read });
+  t.after(() => { direct.close(); owner.close(); peer.close(); });
+  const results = [await direct.run(), ...await Promise.all([owner.run(), peer.run()])];
+  assert.equal(reads, 1);
+  for (const result of results) {
+    assert.deepEqual(result.credits.map(row => row.resetType), ['codexRateLimits', 'unknown', 'unknown', 'unknown']);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE|rawId|token/);
+  }
+});
 async function until(predicate) {
   for (let attempt = 0; attempt < 100; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 1)); }
   assert.ok(predicate(), 'controller must reach the expected asynchronous state');

@@ -6,7 +6,10 @@ const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.proto
 function snapshotPayload(value) {
   if (!value || !Number.isSafeInteger(value.queriedAt) || !Number.isSafeInteger(value.revision)) throw connectionError();
   const result = pick(value, ['queriedAt', 'availableCount', 'detailState', 'ordinaryUsageAllowed', 'revision', 'accountScope']);
-  if (Array.isArray(value.credits)) result.credits = value.credits.map(row => pick(row, ['number', 'title', 'status', 'grantedAt', 'expiresAt', 'expiryState', 'reminderKey']));
+  if (Array.isArray(value.credits)) result.credits = value.credits.map(row => ({
+    ...pick(row, ['number', 'title', 'status', 'grantedAt', 'expiresAt', 'expiryState', 'reminderKey']),
+    resetType: row.resetType === 'codexRateLimits' ? 'codexRateLimits' : 'unknown',
+  }));
   if (Array.isArray(value.usageWindows)) result.usageWindows = value.usageWindows.map(row => pick(row, ['kind', 'windowDurationMins', 'usedPercent', 'remainingPercent', 'resetsAt', 'state']));
   return result;
 }

@@ -1,7 +1,8 @@
 import { formatKst, remainingTime, emptyMessage } from './time.mjs';
 import { initialState, updateState } from './state.mjs';
 import { createReminderController } from './notifications.mjs';
-import { recommendUsage } from './usage-timing.mjs';
+import { recommendUsage, buildUsagePlan } from './usage-timing.mjs';
+import { createUsagePlanView } from './usage-plan-view.mjs';
 import { createUsageAlertController } from './usage-alerts.mjs';
 import { createUsageForecastController } from './usage-forecast.mjs';
 import { compareStartTimes } from './start-time-comparison.mjs';
@@ -23,7 +24,16 @@ const usagePanel = document.getElementById('usage-panel');
 const tablist = document.getElementById('dashboard-tabs');
 const tabElements = [...tablist.querySelectorAll('[role="tab"]')];
 const tabPanels = [...document.querySelectorAll('[data-tab-panel]')];
-const busyPanels = ['usage-panel', 'recommendation', 'start-time-comparison', 'usage-alerts', 'usage-forecast'].map(id => document.getElementById(id));
+const busyPanels = ['usage-panel', 'recommendation', 'start-time-comparison', 'usage-alerts', 'usage-forecast', 'usage-plan'].map(id => document.getElementById(id));
+const planView = createUsagePlanView(document.getElementById('usage-plan-chart'));
+const planRate = document.getElementById('usage-plan-rate');
+const planModes = [...document.querySelectorAll('[name="usage-plan-rate-mode"]')];
+const planError = document.getElementById('usage-plan-input-error');
+const planCompact = Object.fromEntries(['summary', 'first-use', 'leftover', 'next-gap'].map(key => [key, document.getElementById(`usage-plan-${key}`)]));
+const planNumber = new Intl.NumberFormat('ko-KR', { maximumSignificantDigits: 6 });
+let planMode = 'auto';
+let planCache;
+let projectionExpiredSnapshot;
 const motion = createMotionController();
 const announcementKeys = new Map();
 const pendingAnnouncements = new Map();
@@ -82,8 +92,15 @@ function announceStatus(category, key, message, announceInitial = true) {
   });
 }
 function dispatch(event) {
+  const previousState = state;
   const previousSnapshot = state.snapshot;
   state = updateState(state, event);
+  const accountChanged = (previousSnapshot && (!state.snapshot || previousSnapshot.accountScope !== state.snapshot.accountScope || previousSnapshot.revision !== state.snapshot.revision))
+    || (state.revision !== previousState.revision && previousState.revision >= 0)
+    || (['signed-out', 'unsupported'].includes(state.authState) && state.authState !== previousState.authState)
+    || (event.type === 'failure' && event.error.clearPrevious);
+  if (accountChanged) clearUsagePlan();
+  if (event.type === 'success' && state.snapshot === event.snapshot) projectionExpiredSnapshot = undefined;
   if (reminders) {
     if (event.type === 'success' && state.snapshot === event.snapshot) { reminderError = ''; reminders.update(event.snapshot); }
     else if (event.type === 'failure') {
@@ -231,15 +248,79 @@ function renderUsage(snapshot) {
     : snapshot.usageWindows?.every(row => row.state === 'complete') ? 'complete'
     : 'partial';
 }
+function clearUsagePlan() {
+  planMode = 'auto';
+  planRate.value = '';
+  planModes.forEach(input => { input.checked = input.value === 'auto'; });
+  planError.textContent = '';
+  planRate.setAttribute('aria-invalid', 'false');
+  planCache = undefined;
+  projectionExpiredSnapshot = undefined;
+  planView.clear();
+  Object.values(planCompact).forEach(element => { element.textContent = ''; });
+}
+function usagePlan(snapshot, legacy) {
+  const now = Date.now() / 1000;
+  const weeklyForecast = forecast?.enabled ? forecast.read().find(row => row.kind === 'weekly') : null;
+  const automaticRate = ['forecast', 'reset-first'].includes(weeklyForecast?.state) && Number.isFinite(weeklyForecast.ratePerHour) && weeklyForecast.ratePerHour > 0
+    ? weeklyForecast.ratePerHour * 24 : null;
+  const manualRate = planRate.valueAsNumber;
+  const invalid = planMode === 'manual' && (!planRate.validity.valid || !Number.isFinite(manualRate) || manualRate <= 0);
+  const ratePerDay = planMode === 'manual' ? invalid ? null : manualRate : Number.isFinite(automaticRate) ? automaticRate : null;
+  // Keep projections anchored to the successful read. Only schedule boundaries
+  // advance that reference; countdown seconds must not rebuild the chart.
+  if (planCache?.snapshot === snapshot && planCache.plan.exhaustsAt > planCache.referenceNow && planCache.plan.exhaustsAt <= now) projectionExpiredSnapshot = snapshot;
+  const suspended = ['not-ready', 'refreshing', 'refresh-needed', 'server-restricted', 'incomplete'].includes(legacy.code);
+  const boundary = [...(snapshot?.credits ?? []).flatMap(row => row.expiryState === 'known' ? [row.expiresAt - 3600, row.expiresAt] : []),
+    ...(snapshot?.usageWindows ?? []).map(row => row.resetsAt)].filter(at => Number.isFinite(at) && at <= now && at >= snapshot?.queriedAt).sort((a, b) => a - b).at(-1);
+  const expiredProjection = Boolean(snapshot && projectionExpiredSnapshot === snapshot);
+  const key = JSON.stringify([legacy.code, state.loading, state.usageStale, state.connected, state.authState, planMode, planRate.value, invalid,
+    weeklyForecast?.state, ratePerDay, boundary, expiredProjection]);
+  if (!planCache || planCache.snapshot !== snapshot || planCache.key !== key) {
+    const referenceNow = suspended || expiredProjection ? now : Math.max(snapshot?.queriedAt ?? now, boundary ?? 0);
+    let plan = buildUsagePlan(snapshot, { now: referenceNow, refreshing: state.loading,
+      stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' || expiredProjection,
+      ratePerDay, rateSource: planMode });
+    if (plan.state === 'ready' && plan.exhaustsAt > referenceNow && plan.exhaustsAt <= now) {
+      projectionExpiredSnapshot = snapshot;
+      plan = buildUsagePlan(snapshot, { now, stale: true, rateSource: planMode });
+    }
+    if (invalid && plan.state === 'ready') {
+      plan = { ...plan, state: 'incomplete', code: 'invalid-rate', title: '예상 하루 소모량을 확인해 주세요.',
+        reason: '0보다 큰 유한한 숫자를 입력하면 사용 계획을 안내합니다.' };
+    }
+    if (plan.state !== 'ready') {
+      plan = { ...plan, targetAt: null, ratePerDay: null, requiredRatePerDay: null, exhaustsAt: null, remainingAtTarget: null,
+        firstCredit: null, nextCredit: null, firstUseAt: null, nextGapSeconds: null, nextRequiredRatePerDay: null, nextRemainingPercent: null,
+        events: [], segments: [], warnings: [] };
+    } else if (planMode === 'auto' && ratePerDay !== null) {
+      plan = { ...plan, warnings: [...plan.warnings, '자동 소모량은 최근 30분 성공 표본의 속도를 하루 24시간으로 확장한 낙관적 예상입니다.'] };
+    }
+    planCache = { key, snapshot, plan, referenceNow };
+  }
+  planRate.disabled = planMode === 'auto';
+  const fieldError = planCache.plan.code === 'invalid-rate';
+  planRate.setAttribute('aria-invalid', String(fieldError));
+  setText(planError, fieldError ? '0보다 큰 유한한 숫자를 입력해 주세요.' : '');
+  return planCache.plan;
+}
 function renderRecommendation(snapshot) {
-  const recommendation = recommendUsage(snapshot, { refreshing: state.loading, stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
+  const legacy = recommendUsage(snapshot, { refreshing: state.loading, stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
+  const plan = usagePlan(snapshot, legacy);
+  const recommendation = plan.firstCredit || plan.code === 'invalid-rate' || projectionExpiredSnapshot === snapshot && snapshot ? plan : legacy;
+  planView.update(plan);
+  const readyPlan = plan.state === 'ready' && plan.firstCredit !== null;
+  setText(planCompact.summary, readyPlan ? `주간 목표까지 필요한 소모량: ${plan.requiredRatePerDay === null ? '즉시 재조회 필요' : `${planNumber.format(plan.requiredRatePerDay)} %p/일`}` : '');
+  setText(planCompact['first-use'], readyPlan && plan.firstUseAt !== null ? `${plan.ratePerDay === null ? '첫 리셋권 안전 마감 (소진 예상 아님)' : '첫 리셋권 사용 검토'}: ${formatKst(Math.floor(plan.firstUseAt))}` : '');
+  setText(planCompact.leftover, readyPlan && plan.remainingAtTarget !== null ? `목표 시점 예상 잔여: ${planNumber.format(plan.remainingAtTarget)}%` : '');
+  setText(planCompact['next-gap'], readyPlan && plan.nextGapSeconds !== null ? `첫 사용 검토 → 다음 안전 마감: ${planNumber.format(plan.nextGapSeconds / 3600)}시간` : '');
   elements.recommendation.dataset.code = recommendation.code;
   setText(elements['recommendation-title'], recommendation.title, { emphasize: true });
   elements['recommendation-reason'].textContent = recommendation.reason;
   setText(elements['recommendation-target'], recommendation.targetAt === null ? snapshot ? '해당 없음' : '확인 전' : formatKst(recommendation.targetAt), { emphasize: true });
   elements['recommendation-remaining'].textContent = recommendation.targetAt === null ? '' : remainingTime(recommendation.targetAt);
   elements['recommendation-queried-at'].textContent = snapshot ? formatKst(snapshot.queriedAt) : '확인 전';
-  const actionable = ['ready', 'weekly-budget', 'weekly-reset', 'five-hour-reset'].includes(recommendation.code);
+  const actionable = ['ready', 'weekly-budget', 'weekly-reset', 'five-hour-reset', 'credit-deadline', 'credit-before-expiry', 'credit-after-depletion', 'natural-reset-first'].includes(recommendation.code);
   elements['recommendation-disclaimer'].textContent = actionable
     ? '잔여량을 활용하기 위한 권고이며, 작업 횟수나 사용 가능 시간을 보장하지 않습니다.'
     : '최신 상태를 확인한 뒤 사용 시점을 다시 안내합니다.';
@@ -374,7 +455,7 @@ async function start() {
       locks: globalThis.navigator?.locks, Notification: globalThis.Notification, crypto: globalThis.crypto,
       refresh: refreshSnapshot, onError: () => { usageAlertError = '알림을 확인하지 못했습니다. 브라우저 저장소와 설정을 확인해 주세요.'; render(); },
     });
-    forecast = createUsageForecastController({ refresh: refreshSnapshot, onChange: renderForecast });
+    forecast = createUsageForecastController({ refresh: refreshSnapshot, onChange: () => { renderForecast(); renderRecommendation(state.snapshot); } });
     await refresh();
     reminders.restore();
     usageAlerts.restore();
@@ -399,6 +480,8 @@ elements['usage-alerts-toggle'].addEventListener('click', async () => {
   render();
 });
 forecastToggle.addEventListener('click', () => { if (forecast?.enabled) forecast.disable(); else forecast?.enable(); });
+planModes.forEach(input => input.addEventListener('change', () => { planMode = input.value; renderRecommendation(state.snapshot); }));
+planRate.addEventListener('input', () => renderRecommendation(state.snapshot));
 document.addEventListener('visibilitychange', () => forecast?.visibilityChanged());
 addEventListener('storage', event => {
   if (event.key === null || event.key === 'reset-check.reminders.enabled.v1') {
