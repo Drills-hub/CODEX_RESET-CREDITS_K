@@ -35,6 +35,7 @@ let pageGeneration = 0;
 let usageAlertError = '';
 let reminderError = '';
 let animateSnapshotChanges = false;
+const badgeTones = { available: 'success', redeeming: 'warning', redeemed: 'neutral' };
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 const tabs = createTabController({
   tablist,
@@ -158,6 +159,7 @@ function render() {
       const title = node('div');
       title.append(node('span', `리셋권 ${String(credit.number).padStart(2, '0')}`, 'credit-number'), node('h3', credit.title));
       const badge = node('span', labels[credit.status] ?? labels.unknown, 'badge');
+      badge.dataset.tone = badgeTones[credit.status] ?? 'error';
       badge.setAttribute('role', 'img');
       badge.setAttribute('aria-label', `리셋권 상태: ${labels[credit.status] ?? labels.unknown}`);
       header.append(title, badge);
