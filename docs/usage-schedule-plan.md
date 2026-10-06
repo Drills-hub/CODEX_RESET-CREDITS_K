@@ -1,5 +1,7 @@
 # Work-aware usage planning: approved execution contract
 
+> 이전 구현의 기록입니다. 2026-10-04 리셋 추천·만료 캘린더 개편으로 사용 추세·작업 계획·그래프·소진 예상 기능은 제거되었습니다. 현재 동작은 [프로젝트 기획서](project-plan.md)를 참고하세요.
+
 Goal: maximize productive usage of the current weekly allowance AND refill scenarios, prevent expiry of the first two available dated credits, minimize allowance discarded on resets. Recommend a feasible window rather than one falsely precise time. No redemption/API changes/dependencies/persistence. Existing plan remains unchanged when work-aware option off. Keep 375x950 metrics+recommendation+tabs,44px controls,320px overflow,light/dark,reduced-motion. Main original4 dirty tests preserved. Baseline b265445,205Node90browser tests previously green. Local feature commits permitted; no main merge/push/delete.
 
 ## Shared pure engine contract (engine worker ONLY owns public/usage-scheduler.mjs and test/usage-scheduler.test.mjs)

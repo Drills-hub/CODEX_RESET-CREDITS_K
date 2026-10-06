@@ -73,7 +73,7 @@ test('invalid timestamps and unknown statuses fail safely', () => {
   const defaulted = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [
     { status: 'future-status', expiresAt: null, grantedAt: 'bad' },
   ] } }, 1000);
-  assert.deepEqual(defaulted.credits, [{ number: 1, title: '리셋권', status: 'unknown', grantedAt: null, expiresAt: null, expiryState: 'none' }]);
+  assert.deepEqual(defaulted.credits, [{ number: 1, title: '리셋권', status: 'unknown', resetType: 'unknown', grantedAt: null, expiresAt: null, expiryState: 'none' }]);
   const invalidTimes = normalizeCredits({ rateLimits: {}, rateLimitResetCredits: { availableCount: 1, credits: [
     { expiresAt: 'bad', grantedAt: -1 },
   ] } });

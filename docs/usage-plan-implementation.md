@@ -1,5 +1,7 @@
 # Usage plan implementation contract
 
+> 이전 구현의 기록입니다. 2026-10-04 리셋 추천·만료 캘린더 개편으로 사용 추세·작업 계획·그래프·소진 예상 기능은 제거되었습니다. 현재 동작은 [프로젝트 기획서](project-plan.md)를 참고하세요.
+
 ## Goal and constraints
 
 Prevent reset-credit expiry while maximizing current weekly allowance and showing the next credit's deadline gap. Read-only app: never redeem credits or execute models. No dependencies, storage of usage/history/input, credentials or external assets. Preserve existing tabs, KST format, light/dark palette, motion/accessibility, polling and security. Original checkout has unrelated uncommitted test cleanup: leave it untouched. Use TDD and apply_patch. Workers never spawn agents. Each worker commits only its scope and reports RED/GREEN, full npm test results, changed paths, commit and concerns.

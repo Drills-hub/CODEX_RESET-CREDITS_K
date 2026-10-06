@@ -1,7 +1,8 @@
-export const TAB_IDS = Object.freeze(['schedule', 'forecast', 'alerts', 'credits']);
-export const DEFAULT_TAB = 'schedule';
+export const TAB_IDS = Object.freeze(['credits', 'calendar', 'alerts']);
+export const DEFAULT_TAB = 'credits';
 
 export function normalizeTab(value) {
+  if (value === 'schedule' || value === 'forecast') return 'credits';
   return TAB_IDS.includes(value) ? value : DEFAULT_TAB;
 }
 

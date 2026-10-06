@@ -81,369 +81,13 @@ function skipWithoutBrowser(t) {
   return true;
 }
 
-const planAt = 1791072000;
-const day = 86400;
-function planSnapshot({ at = planAt, remaining = 80, revision = 0, accountScope = 'plan-account', five = 65, allowed = null } = {}) {
-  return {
-    queriedAt: at, availableCount: 2, detailState: 'complete', revision, accountScope, ordinaryUsageAllowed: allowed,
-    credits: [1, 3].map((days, index) => ({ number: index + 1, title: `계획 리셋권 ${index + 1}`, status: 'available',
-      grantedAt: planAt - day, expiresAt: planAt + days * day, expiryState: 'known', resetType: 'codexRateLimits' })),
-    usageWindows: [
-      { kind: 'five-hour', windowDurationMins: 300, usedPercent: 100 - five, remainingPercent: five, resetsAt: planAt + 8 * day, state: 'complete' },
-      { kind: 'weekly', windowDurationMins: 10080, usedPercent: 100 - remaining, remainingPercent: remaining, resetsAt: planAt + 7 * day, state: 'complete' },
-    ],
-  };
-}
-async function manualPlan(page, value = '40') {
-  await selectTab(page, 'schedule');
-  await page.locator('[name="usage-plan-rate-mode"][value="manual"]').check();
-  await page.locator('#usage-plan-rate').fill(value);
-}
-async function planMetric(page, label) {
-  return page.locator('#usage-plan-chart .usage-plan-metrics > div').filter({ has: page.locator('dt', { hasText: label }) }).locator('dd').innerText();
-}
-
-test('usage plan manual rate connects real engine, main summary and conditional refill chart', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
-  assert.equal(await page.locator('#usage-plan-rate').isDisabled(), true);
-  await manualPlan(page);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-before-expiry');
-  assert.match(await page.locator('#recommendation-reason').innerText(), /허용.*확인/);
-  assert.match(await page.locator('#recommendation-reason').innerText(), /41\.6667%/);
-  assert.doesNotMatch(await page.locator('#recommendation-reason').innerText(), /41\.666666/);
-  assert.match(await planMetric(page, '목표 시점 예상 잔여량'), /41\.6667%/);
-  assert.match(await page.locator('#usage-plan-leftover').innerText(), /41\.6667%/);
-  assert.match(await planMetric(page, '첫 사용 검토부터 다음 안전 마감까지'), /48시간/);
-  assert.match(await page.locator('#usage-plan-next-gap').innerText(), /48시간/);
-  assert.match(await page.locator('#usage-plan-chart').innerText(), /100%.*가정/);
-  assert.equal(await page.locator('#usage-plan-chart [data-segment-kind="scenario"]').count(), 1);
-  assert.equal(await page.locator('.recommendation-timing').isVisible(), false); // Exact target already shown by first review.
-  await manualPlan(page, '160');
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-after-depletion');
-  assert.match(await page.locator('#recommendation-reason').innerText(), /소진.*재조회/);
-  assert.match(await page.locator('#usage-plan-first-use').innerText(), /2026-10-04 21:00:00/);
-  assert.match(await planMetric(page, '소모량 출처'), /직접 입력/);
-  assert.equal(await page.locator('.recommendation-timing').isVisible(), true); // Target differs from earlier depletion review.
-});
-
-test('usage plan manual invalid values suppress action, retain across tabs and restore auto', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
-  for (const value of ['', '0', '-1']) {
-    await manualPlan(page, value);
-    assert.equal(await page.locator('#usage-plan-rate').getAttribute('aria-invalid'), 'true');
-    assert.match(await page.locator('#usage-plan-input-error').innerText(), /0보다 큰.*숫자/);
-    assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-    assert.equal(await page.locator('#usage-plan-first-use').innerText(), '');
-    assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'invalid-rate');
-  }
-  await manualPlan(page, '0.05');
-  assert.equal(await page.locator('#usage-plan-rate').getAttribute('aria-invalid'), 'false');
-  await selectTab(page, 'credits'); await selectTab(page, 'schedule');
-  assert.equal(await page.locator('#usage-plan-rate').inputValue(), '0.05');
-  await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
-  assert.equal(await page.locator('#usage-plan-rate').inputValue(), '0.05');
-  await manualPlan(page, '');
-  await page.locator('[name="usage-plan-rate-mode"][value="auto"]').check();
-  assert.equal(await page.locator('#usage-plan-input-error').innerText(), '');
-  assert.equal(await page.locator('#usage-plan-rate').isDisabled(), true);
-  assert.equal(await page.locator('#forecast-toggle').innerText(), '추세 켜기');
-});
-
-test('usage plan automatic rate follows opted-in forecast samples and opt-out without extra reads', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let reads = 0;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => {
-    const n = reads++;
-    return planSnapshot({ at: planAt + n * 300, remaining: 80 - n });
-  } });
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-deadline');
-  await selectTab(page, 'forecast'); await page.locator('#forecast-toggle').click();
-  for (let n = 2; n <= 3; n++) {
-    await page.clock.runFor(300000);
-    await page.waitForFunction(n => document.querySelector('#forecast-weekly .forecast-samples').textContent.includes(`${n}건`), n);
-  }
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-after-depletion');
-  await selectTab(page, 'schedule');
-  assert.match(await planMetric(page, '예상 하루 소모량'), /288.*%p\/일/);
-  assert.match(await planMetric(page, '소모량 출처'), /자동/);
-  assert.match(await page.locator('#usage-plan-chart').innerText(), /30분.*낙관/);
-  await selectTab(page, 'forecast'); await page.locator('#forecast-toggle').click();
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-deadline');
-  await selectTab(page, 'schedule');
-  assert.equal(await page.locator('#usage-plan-chart [data-segment-kind]').count(), 0);
-  await page.clock.runFor(300000); assert.equal(reads, 3);
-});
-
-test('usage plan account boundaries erase inputs and hidden charts while transient failure pauses', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let revision = 0; let scope = 'plan-account'; let auth = 'chatgpt'; let failed = false;
-  const page = await openApp(t, { clockTime: planAt * 1000,
-    status: () => ({ connected: true, authState: auth, revision, busy: false }),
-    read: () => { if (failed) throw new AppError('UPSTREAM'); return planSnapshot({ revision, accountScope: scope }); } });
-  await manualPlan(page);
-  failed = true; await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
-  assert.equal(await page.locator('#usage-plan-rate').inputValue(), '40');
-  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /80%/);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-  await manualPlan(page, '');
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-input-error').innerText(), '');
-  failed = false; await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
-  await manualPlan(page); await selectTab(page, 'credits');
-  revision = 1; await page.clock.runFor(5000);
-  await page.waitForFunction(() => document.querySelector('#usage-plan-rate').value === '');
-  assert.equal(await page.locator('[name="usage-plan-rate-mode"][value="auto"]').isChecked(), true);
-  assert.doesNotMatch(await page.locator('#usage-plan-chart').textContent(), /계획 리셋권|41\.6667/);
-  await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
-  await manualPlan(page); scope = 'new-scope';
-  await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
-  assert.equal(await page.locator('#usage-plan-rate').inputValue(), '');
-  await manualPlan(page); await selectTab(page, 'credits'); auth = 'signed-out';
-  await page.clock.runFor(5000); await page.waitForFunction(() => document.querySelector('#usage-plan-rate').value === '');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-});
-
-test('usage plan revision and logout clear manual mode even before a first successful read', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let revision = 0; let authState = 'chatgpt';
-  const page = await openApp(t, { clockTime: planAt * 1000,
-    status: () => ({ connected: true, authState, revision, busy: false }), read: () => { throw new AppError('UPSTREAM'); } });
-  await manualPlan(page); revision = 1;
-  await page.clock.runFor(5000); await page.waitForFunction(() => document.querySelector('#usage-plan-rate').value === '');
-  await manualPlan(page); authState = 'unsupported';
-  await page.clock.runFor(5000); await page.waitForFunction(() => document.querySelector('#usage-plan-rate').value === '');
-  assert.equal(await page.locator('[name="usage-plan-rate-mode"][value="auto"]').isChecked(), true);
-});
-
-test('usage plan ticks preserve SVG nodes and announcements, boundaries requery without refill', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const value = planSnapshot();
-  value.credits[0].expiresAt = planAt + 3605;
-  value.usageWindows[1].resetsAt = planAt + 3700;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => value });
-  await manualPlan(page);
-  await page.evaluate(() => {
-    globalThis.__planSvg = document.querySelector('#usage-plan-chart svg');
-    globalThis.__planMutations = 0;
-    new MutationObserver(records => { globalThis.__planMutations += records.length; }).observe(document.querySelector('#usage-plan-chart'), { subtree: true, childList: true, characterData: true, attributes: true });
-    globalThis.__planAnnouncements = 0;
-    new MutationObserver(records => { globalThis.__planAnnouncements += records.length; }).observe(document.querySelector('#usage-announcement'), { childList: true });
-  });
-  await page.clock.runFor(3000);
-  assert.equal(await page.evaluate(() => __planSvg === document.querySelector('#usage-plan-chart svg')), true);
-  assert.equal(await page.evaluate(() => __planMutations), 0);
-  assert.equal(await page.evaluate(() => __planAnnouncements), 0);
-  await page.clock.runFor(3000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.match(await page.locator('#usage-plan-chart').innerText(), /마감.*재조회/);
-  await page.clock.fastForward(3600000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.doesNotMatch(await page.locator('#usage-plan-first-use').innerText(), /2026-10-04 09:00:05/);
-  await page.clock.fastForward(100000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /80%/);
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-});
-
-test('usage plan predicted depletion pauses instead of restarting from the old balance', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
-  await manualPlan(page, '691200'); // 80 percentage points in ten seconds
-  await page.clock.runFor(11000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /80%/);
-});
-
-test('usage plan newly entered rate suspends immediately when its snapshot estimate is already past', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
-  await page.clock.runFor(20000);
-  await manualPlan(page, '691200');
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-});
-
-test('usage plan rounded positive-balance depletion requires requery across arbitrary same-account inputs', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let reads = 0;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => { reads++; return planSnapshot(); } });
-  await page.clock.runFor(20000);
-  await manualPlan(page, '1e20'); // Positive duration rounds back to queriedAt in Unix seconds.
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-  for (const value of ['40', '', '0', '0.05']) {
-    await page.locator('#usage-plan-rate').fill(value);
-    assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-    assert.equal(await page.locator('#usage-plan-first-use').innerText(), '');
-    assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-  }
-  await page.locator('[name="usage-plan-rate-mode"][value="auto"]').check();
-  await page.clock.runFor(1000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /80%/);
-  assert.equal(reads, 1);
-});
-
-test('usage plan rounded depletion entered at query time remains suspended on cached ticks', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
-  await manualPlan(page, '1e20');
-  await page.clock.runFor(20000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-});
-
-test('usage plan true zero weekly balance retains immediate constrained credit review', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot({ remaining: 0 }) });
-  await page.clock.runFor(20000);
-  await manualPlan(page, '1e20');
-  for (const rate of ['1e20', '40']) {
-    await page.locator('#usage-plan-rate').fill(rate);
-    await page.clock.runFor(1000);
-    assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-after-depletion');
-    assert.match(await page.locator('#recommendation-title').innerText(), /즉시/);
-    assert.match(await page.locator('#recommendation-reason').innerText(), /주간.*0%.*제한/);
-    assert.doesNotMatch(await page.locator('#recommendation').innerText(), /지금 사용 가능|현재 사용 가능/);
-    assert.match(await page.locator('#usage-plan-first-use').innerText(), /2026-10-04 09:00:00/);
-  }
-});
-
-test('usage plan fresh read exactly at safe deadline retains immediate credit review', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = planAt + 82800;
-  const page = await openApp(t, { clockTime: at * 1000, read: () => planSnapshot({ at, remaining: 42 }) });
-  await manualPlan(page);
-  await page.clock.runFor(1000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'credit-before-expiry');
-  assert.match(await page.locator('#usage-plan-summary').innerText(), /즉시 재조회/);
-  assert.match(await page.locator('#usage-plan-first-use').innerText(), /2026-10-05 08:00:00/);
-  assert.match(await page.locator('#usage-plan-leftover').innerText(), /42%/);
-  assert.match(await page.locator('#usage-plan-chart').innerText(), /즉시 재조회/);
-});
-
-test('usage plan event reference remains accurately labelled after wall clock advances', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
-  await page.clock.runFor(20000);
-  await manualPlan(page);
-  const event = page.locator('#usage-plan-chart .usage-plan-event-list li').first();
-  assert.match(await event.innerText(), /계산 기준 시각.*2026-10-04 09:00:00/s);
-  assert.doesNotMatch(await event.innerText(), /현재 시각/);
-  await page.clock.runFor(1000);
-  assert.match(await event.innerText(), /계산 기준 시각.*2026-10-04 09:00:00/s);
-});
-
-test('usage plan deadline continuity suspends old balance until a successful requery', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let reads = 0;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => {
-    reads++;
-    return planSnapshot({ at: reads === 1 ? planAt : planAt + 82801, remaining: reads === 1 ? 80 : 42 });
-  } });
-  await manualPlan(page, '40');
-  assert.match(await page.locator('#usage-plan-leftover').innerText(), /41\.6667%/);
-  await page.clock.fastForward(82801000);
-  assert.equal(reads, 1);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-leftover').innerText(), '');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /80%/);
-  assert.match(await page.locator('#usage-plan-chart').innerText(), /마감.*재조회/);
-  await page.locator('#refresh').click();
-  await page.waitForFunction(() => document.body.dataset.loading === 'false');
-  assert.equal(reads, 2);
-  assert.match(await page.locator('#usage-plan-leftover').innerText(), /42%/);
-  assert.match(await page.locator('#usage-weekly .usage-percent').innerText(), /42%/);
-  assert.equal(await page.locator('#usage-plan-rate').inputValue(), '40');
-});
-
-test('usage plan extreme rate after deadline cannot resume an old actionable estimate', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let reads = 0;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => { reads++; return planSnapshot(); } });
-  await page.clock.fastForward(82801000);
-  await manualPlan(page, '691200');
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-first-use').innerText(), '');
-  assert.equal(await page.locator('#usage-plan-leftover').innerText(), '');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-  assert.equal(reads, 1);
-});
-
-test('usage plan elapsed-depletion entry after a clock jump suspends without a timer tick', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { clockTime: planAt * 1000, read: () => planSnapshot() });
-  await manualPlan(page, '40');
-  await page.clock.setSystemTime(new Date((planAt + 82801) * 1000));
-  await page.locator('#usage-plan-rate').fill('691200');
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.equal(await page.locator('#usage-plan-chart svg:visible').count(), 0);
-});
-
-for (const theme of ['light', 'dark']) for (const mode of ['auto', 'manual']) {
-  test(`usage plan ${theme} ${mode} future-credit main and tabs fit first 950px`, async t => {
-    if (skipWithoutBrowser(t)) return;
-    const context = await browser.newContext({ colorScheme: theme, reducedMotion: 'reduce', viewport: { width: 375, height: 950 } });
-    t.after(() => context.close());
-    const page = await openApp(t, { context, clockTime: planAt * 1000, read: () => planSnapshot() });
-    if (mode === 'manual') await manualPlan(page);
-    await page.evaluate(() => scrollTo(0, 0));
-    const geometry = await page.evaluate(() => ({
-      bounds: Object.fromEntries(['#usage-five-hour', '#usage-weekly', '#recommendation', '#dashboard-tabs'].map(selector => {
-        const rect = document.querySelector(selector).getBoundingClientRect();
-        return [selector, { top: rect.top, bottom: rect.bottom, height: rect.height }];
-      })),
-      controls: [...document.querySelectorAll('#refresh, [role="tab"], .usage-plan-rate-choice, #usage-plan-rate')].filter(element => element.getClientRects().length > 0).map(element => element.getBoundingClientRect().height),
-      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    }));
-    console.log(`Future-credit first viewport ${theme} ${mode}: ${JSON.stringify(geometry)}`);
-    await page.screenshot({ path: join(outputDir, `usage-plan-first-viewport-${theme}-${mode}.png`) });
-    for (const [selector, rect] of Object.entries(geometry.bounds)) {
-      assert.ok(rect.top >= 0 && rect.bottom <= 950, `${selector} must fit first viewport: ${JSON.stringify(geometry)}`);
-    }
-    assert.equal(geometry.overflow, false);
-    assert.ok(geometry.controls.every(height => height >= 44));
-    assert.match(await page.locator('#recommendation-reason').innerText(), /재조회/);
-    assert.match(await page.locator('#recommendation-reason').innerText(), /허용.*확인/);
-    assert.match(await page.locator('#usage-plan-chart').innerText(), /100%.*가정/);
-  });
-}
-
-for (const theme of ['light', 'dark']) for (const width of [320, 375, 768, 1280]) {
-  test(`usage plan ${theme} ${width}px actual feature capture and accessible controls`, async t => {
-    if (skipWithoutBrowser(t)) return;
-    const context = await browser.newContext({ colorScheme: theme, reducedMotion: 'reduce', viewport: { width, height: 950 } });
-    t.after(() => context.close());
-    const page = await openApp(t, { context, clockTime: planAt * 1000, read: () => planSnapshot() });
-    await manualPlan(page);
-    await page.evaluate(() => scrollTo(0, 0));
-    const geometry = await page.evaluate(() => ({
-      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-      controls: [...document.querySelectorAll('.usage-plan-rate-choice, #usage-plan-rate')].filter(element => element.getClientRects().length > 0).map(element => element.getBoundingClientRect().height),
-      events: document.querySelectorAll('#usage-plan-chart .usage-plan-event-list li').length,
-      markers: document.querySelectorAll('#usage-plan-chart [data-event-kind]').length,
-      animations: document.getAnimations().filter(animation => animation.effect.getTiming().duration > 1).length,
-    }));
-    assert.equal(geometry.overflow, false);
-    assert.ok(geometry.controls.every(height => height >= 44));
-    assert.equal(geometry.events, 5); assert.equal(geometry.markers, 5);
-    assert.equal(geometry.animations, 0);
-    await page.screenshot({ path: join(outputDir, `usage-plan-${theme}-${width}.png`), fullPage: true });
-  });
-}
-
 for (const width of widths) {
   test(`Chromium ${width}px: long partial data fits, focus is visible, screenshot captured`, async t => {
     if (skipWithoutBrowser(t)) return;
     const page = await openApp(t);
     await page.setViewportSize({ width, height: 950 });
     const geometry = await page.evaluate(() => {
-      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#usage-five-hour', '#usage-weekly', '#recommendation', '#start-time-comparison'];
+      const selectors = ['#refresh', '#notice', '#nearest', '#nearest-remaining', '#usage-five-hour', '#usage-weekly', '#recommendation'];
       const boxes = selectors.map(selector => {
         const element = document.querySelector(selector);
         const rect = element.getBoundingClientRect();
@@ -457,14 +101,12 @@ for (const width of widths) {
       return {
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: document.documentElement.clientWidth,
-        caption: (() => { const rect = document.querySelector('.comparison caption').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })(),
         boxes,
         clipped: boxes.filter(box => box.scrollWidth > box.clientWidth).map(box => box.selector),
         overlaps,
       };
     });
     assert.ok(geometry.documentWidth <= geometry.viewportWidth, `horizontal overflow: ${geometry.documentWidth}px > ${geometry.viewportWidth}px`);
-    assert.ok(geometry.caption.width >= 200 && geometry.caption.height < 80, 'comparison caption must use the table width rather than wrapping one character per line');
     for (const box of geometry.boxes) assert.ok(box.left >= 0 && box.right <= width, `${box.selector} must fit viewport`);
     assert.deepEqual(geometry.clipped, [], `content must not be clipped: ${geometry.clipped.join(', ')}`);
     assert.deepEqual(geometry.overlaps, [], `content boxes must not overlap: ${geometry.overlaps.join(', ')}`);
@@ -478,26 +120,25 @@ for (const width of widths) {
       context.fillStyle = style.outlineColor;
       context.fillRect(0, 0, 1, 1);
       return {
-        id: active.id,
+        id: active.id || active.closest('details')?.id,
         focusVisible: active.matches(':focus-visible'),
         outlineStyle: style.outlineStyle,
         outlineWidth: Number.parseFloat(style.outlineWidth),
         outlineAlpha: context.getImageData(0, 0, 1, 1).data[3],
       };
     });
-    assert.equal(focus.id, 'refresh');
+    assert.equal(focus.id, 'query-time-details');
     assert.equal(keyboardFocusIsVisible(focus), true, `keyboard focus must be visible: ${JSON.stringify(focus)}`);
     await page.screenshot({ path: join(outputDir, `long-partial-${width}.png`), fullPage: true });
-    await page.locator('#start-time-comparison').screenshot({ path: join(outputDir, `comparison-${width}.png`) });
     await selectTab(page, 'credits');
     assert.match(await page.locator('#coverage').innerText(), /1개|부분|조회/);
     assert.equal(await page.locator('.credit').count(), 1);
     if (width === 375 || width === 1280) {
       await page.waitForTimeout(240);
       await page.screenshot({ path: join(outputDir, `credits-${width}.png`), fullPage: true });
-      await selectTab(page, 'forecast');
+      await selectTab(page, 'calendar');
       await page.waitForTimeout(240);
-      await page.screenshot({ path: join(outputDir, `forecast-${width}.png`), fullPage: true });
+      await page.screenshot({ path: join(outputDir, `calendar-${width}.png`), fullPage: true });
       await selectTab(page, 'alerts');
       await page.waitForTimeout(240);
       await page.screenshot({ path: join(outputDir, `alerts-${width}.png`), fullPage: true });
@@ -507,37 +148,37 @@ for (const width of widths) {
 
 test('dashboard tabs expose ARIA state, preserve query values, and follow browser history', async t => {
   if (skipWithoutBrowser(t)) return;
-  const page = await openApp(t, { entryPath: '/?source=desktop&tab=forecast' });
+  const page = await openApp(t, { entryPath: '/?source=desktop&tab=calendar' });
   assert.equal(new URL(page.url()).hash, '');
   assert.equal(new URL(page.url()).searchParams.get('source'), 'desktop');
-  assert.equal(new URL(page.url()).searchParams.get('tab'), 'forecast');
+  assert.equal(new URL(page.url()).searchParams.get('tab'), 'calendar');
   const tabs = page.getByRole('tab');
-  assert.equal(await tabs.count(), 4);
-  assert.equal(await page.getByRole('tab', { name: '사용 추세' }).getAttribute('aria-selected'), 'true');
-  assert.equal(await page.locator('[data-tab-panel="forecast"]').isVisible(), true);
-  assert.equal(await page.locator('[data-tab-panel="schedule"]').isVisible(), false);
+  assert.equal(await tabs.count(), 3);
+  assert.equal(await page.getByRole('tab', { name: '만료 캘린더' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('[data-tab-panel="calendar"]').isVisible(), true);
+  assert.equal(await page.locator('[data-tab-panel="credits"]').isVisible(), false);
 
-  await page.getByRole('tab', { name: '사용 추세' }).press('ArrowRight');
+  await page.getByRole('tab', { name: '만료 캘린더' }).press('ArrowRight');
   assert.equal(await page.getByRole('tab', { name: '알림' }).getAttribute('aria-selected'), 'true');
   assert.equal(new URL(page.url()).searchParams.get('tab'), 'alerts');
   await page.goBack();
-  await page.waitForFunction(() => document.querySelector('[data-tab="forecast"]')?.getAttribute('aria-selected') === 'true');
-  assert.equal(new URL(page.url()).searchParams.get('tab'), 'forecast');
+  await page.waitForFunction(() => document.querySelector('[data-tab="calendar"]')?.getAttribute('aria-selected') === 'true');
+  assert.equal(new URL(page.url()).searchParams.get('tab'), 'calendar');
 
-  await page.getByRole('tab', { name: '사용 추세' }).press('End');
+  await page.getByRole('tab', { name: '만료 캘린더' }).press('End');
+  assert.equal(await page.getByRole('tab', { name: '알림' }).getAttribute('aria-selected'), 'true');
+  await page.getByRole('tab', { name: '알림' }).press('Home');
   assert.equal(await page.getByRole('tab', { name: '리셋 상세' }).getAttribute('aria-selected'), 'true');
-  await page.getByRole('tab', { name: '리셋 상세' }).press('Home');
-  assert.equal(await page.getByRole('tab', { name: '리셋 일정' }).getAttribute('aria-selected'), 'true');
 });
 
-test('invalid tab values normalize to schedule without discarding other query values', async t => {
+test('invalid tab values normalize to credits without discarding other query values', async t => {
   if (skipWithoutBrowser(t)) return;
   const page = await openApp(t, { entryPath: '/?source=desktop&tab=unknown' });
   const url = new URL(page.url());
   assert.equal(url.hash, '');
   assert.equal(url.searchParams.get('source'), 'desktop');
-  assert.equal(url.searchParams.get('tab'), 'schedule');
-  assert.equal(await page.getByRole('tab', { name: '리셋 일정' }).getAttribute('aria-selected'), 'true');
+  assert.equal(url.searchParams.get('tab'), 'credits');
+  assert.equal(await page.getByRole('tab', { name: '리셋 상세' }).getAttribute('aria-selected'), 'true');
 });
 
 test('reduced motion disables dashboard Web Animations API effects', async t => {
@@ -554,7 +195,7 @@ test('reduced motion disables dashboard Web Animations API effects', async t => 
   });
   const page = await openApp(t, { context });
   await page.setViewportSize({ width: 375, height: 950 });
-  await selectTab(page, 'forecast');
+  await selectTab(page, 'calendar');
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.body.dataset.loading === 'false');
   assert.equal(await page.evaluate(() => globalThis.__dashboardAnimations), 0);
@@ -567,6 +208,7 @@ for (const colorScheme of ['light', 'dark']) test(`${colorScheme} theme meets da
   const page = await openApp(t, { context });
   await page.setViewportSize({ width: 375, height: 950 });
   await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab'); // Query time disclosure precedes refresh in DOM order.
   const ratios = await page.evaluate(() => {
     const rgb = value => value.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel => channel / 255);
     const luminance = value => rgb(value).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4)
@@ -592,7 +234,7 @@ for (const colorScheme of ['light', 'dark']) test(`${colorScheme} theme meets da
   await page.screenshot({ path: join(outputDir, `theme-${colorScheme}-375.png`), fullPage: true });
 });
 
-test('mobile controls meet target size and the primary dashboard fits the first viewport', async t => {
+test('mobile controls meet target size and the dashboard grows naturally without overlapping tabs', async t => {
   if (skipWithoutBrowser(t)) return;
   const page = await openApp(t);
   await page.setViewportSize({ width: 375, height: 950 });
@@ -600,7 +242,7 @@ test('mobile controls meet target size and the primary dashboard fits the first 
     const rect = document.querySelector(selector).getBoundingClientRect();
     return [selector, { top: rect.top, bottom: rect.bottom, height: rect.height }];
   })));
-  assert.ok(layout['#dashboard-tabs'].bottom <= 950, `dashboard tabs should be visible in the first viewport: ${JSON.stringify(layout)}`);
+  assert.ok(layout['#dashboard-tabs'].top >= layout['#main-status-card'].bottom, `tabs must follow the naturally sized card: ${JSON.stringify(layout)}`);
   await selectTab(page, 'alerts');
   const sizes = await page.locator('#refresh, [role="tab"], #usage-alerts-toggle, #notifications-toggle').evaluateAll(elements => elements.map(element => ({ id: element.id, height: element.getBoundingClientRect().height })));
   for (const size of sizes) assert.ok(size.height >= 44, `${size.id} target height ${size.height}px`);
@@ -620,7 +262,7 @@ test('tab and refreshed-value changes use the approved state animations', async 
   });
   const page = await openApp(t, { context });
   await page.evaluate(() => { globalThis.__dashboardAnimationDurations = []; });
-  await selectTab(page, 'forecast');
+  await selectTab(page, 'calendar');
   const durations = await page.evaluate(() => globalThis.__dashboardAnimationDurations);
   assert.ok(durations.includes(180), `tab indicator durations: ${durations}`);
   assert.ok(durations.includes(200), `panel durations: ${durations}`);
@@ -634,7 +276,8 @@ test('usage dashboard renders percentages and reset times and preserves them on 
   } });
   assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
   assert.equal(await page.locator('#usage-weekly .usage-percent').innerText(), '20%');
-  assert.match(await page.locator('#usage-five-hour .usage-reset').innerText(), /KST/);
+  await page.locator('#usage-five-hour-details summary').click();
+  assert.match(await page.locator('#usage-five-hour .usage-reset-full').innerText(), /KST/);
   assert.equal(await page.locator('#usage-five-hour progress').getAttribute('value'), '65');
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
@@ -687,40 +330,6 @@ test('server usage restriction remains visible after a reset or failed refresh',
   assert.match(await page.locator('#usage-status').innerText(), /이전 조회/);
 });
 
-test('timing recommendation shows its reason and query time and stays paused after failed refresh', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000);
-  const page = await openApp(t, { read: n => {
-    if (n === 2) throw new AppError('TIMEOUT');
-    return { ...longSnapshot, queriedAt: at, usageWindows: [
-      { ...longSnapshot.usageWindows[0], resetsAt: at + 3600 },
-      { ...longSnapshot.usageWindows[1], resetsAt: at + 86400 },
-    ] };
-  } });
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'weekly-reset');
-  assert.match(await page.locator('#recommendation-reason').innerText(), /20%/);
-  assert.match(await page.locator('#recommendation-queried-at').innerText(), /KST/);
-  await page.locator('#refresh').click();
-  await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.doesNotMatch(await page.locator('#recommendation').innerText(), /잔여량을 활용하기 위한 권고/);
-  await page.locator('#refresh').click();
-  await page.waitForFunction(() => document.querySelector('#recommendation')?.dataset.code === 'weekly-reset');
-});
-
-test('timing recommendation becomes requery guidance when a reset passes', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000);
-  const page = await openApp(t, { clockTime: at * 1000, read: () => ({ ...longSnapshot, queriedAt: at, usageWindows: [
-    { ...longSnapshot.usageWindows[0], resetsAt: at + 60 },
-    { ...longSnapshot.usageWindows[1], resetsAt: at + 172800 },
-  ] }) });
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'weekly-budget');
-  await page.clock.fastForward(61000);
-  assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
-  assert.doesNotMatch(await page.locator('#recommendation').innerText(), /잔여량을 활용하기 위한 권고/);
-});
-
 test('usage alert opt-in validates low allowance, persists, and avoids reload duplicates', async t => {
   if (skipWithoutBrowser(t)) return;
   const context = await browser.newContext(); t.after(() => context.close());
@@ -768,123 +377,6 @@ test('usage reset alert uses a real requery and never promises restored permissi
   assert.equal(reads, 3);
 });
 
-test('forecast opt-in polls at five minutes, derives rates, and clears after opt-out or reload', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000); let reads = 0;
-  const page = await openApp(t, { clockTime: at * 1000, read: () => {
-    const n = reads++;
-    return { ...longSnapshot, queriedAt: at + n * 300, accountScope: 'forecast-account', usageWindows: [
-      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - n * 10, usedPercent: n * 10, resetsAt: at + 18000 },
-      { ...longSnapshot.usageWindows[1], remainingPercent: 50 - n, usedPercent: 50 + n, resetsAt: at + 604800 },
-    ] };
-  } });
-  assert.equal(reads, 1);
-  await selectTab(page, 'forecast');
-  await page.locator('#forecast-toggle').click();
-  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /1건/);
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
-  assert.equal(reads, 2);
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
-  assert.equal(reads, 3);
-  assert.match(await page.locator('#forecast-five-hour .forecast-rate').innerText(), /120\.0%p/);
-  assert.match(await page.locator('#forecast-weekly .forecast-rate').innerText(), /12\.0%p/);
-  assert.match(await page.locator('#forecast-five-hour .forecast-exhaustion').innerText(), /KST/);
-  await page.locator('#forecast-toggle').click();
-  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '계산 전');
-  await page.clock.runFor(300000); assert.equal(reads, 3);
-  await page.reload(); await page.waitForFunction(() => document.querySelector('#forecast-toggle')?.textContent === '추세 켜기');
-  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /0건/);
-});
-
-test('forecast hides stale extrapolation after failed polling and recovers on a successful read', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000); let reads = 0; let failed = false;
-  const page = await openApp(t, { clockTime: at * 1000, read: () => {
-    reads++;
-    if (failed) throw new AppError('TIMEOUT');
-    return { ...longSnapshot, queriedAt: at + (reads - 1) * 300, accountScope: 'forecast-account', usageWindows: [
-      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - (reads - 1) * 10, resetsAt: at + 18000 },
-    ] };
-  } });
-  await selectTab(page, 'forecast');
-  await page.locator('#forecast-toggle').click();
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
-  failed = true; await page.clock.runFor(300000);
-  await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'stale');
-  assert.equal(await page.locator('#forecast-five-hour .forecast-rate').innerText(), '계산 전');
-  failed = false; await page.clock.runFor(300000);
-  await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
-});
-
-test('forecast auto-retries after the first usage read fails despite ongoing empty status polls', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000); let reads = 0;
-  const page = await openApp(t, { clockTime: at * 1000, read: () => {
-    if (++reads === 1) throw new AppError('TIMEOUT');
-    return { ...longSnapshot, queriedAt: at + 300, accountScope: 'forecast-account', usageWindows: [
-      { ...longSnapshot.usageWindows[0], resetsAt: at + 18000 },
-    ] };
-  } });
-  await selectTab(page, 'forecast');
-  await page.locator('#forecast-toggle').click();
-  await page.clock.runFor(300000);
-  await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('1건'));
-  assert.equal(reads, 2);
-});
-
-test('start-time comparison displays three options and the weekly bottleneck without future refill claims', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let reads = 0;
-  const page = await openApp(t, { read: () => { reads++; return { ...longSnapshot, ordinaryUsageAllowed: true, usageWindows: [
-    longSnapshot.usageWindows[0], { ...longSnapshot.usageWindows[1], remainingPercent: 0, usedPercent: 100 },
-  ] }; } });
-  assert.equal(await page.locator('#start-time-comparison tbody tr').count(), 3);
-  assert.equal(await page.locator('#comparison-now').getAttribute('data-state'), 'exhausted');
-  assert.equal(await page.locator('#comparison-five-hour').getAttribute('data-state'), 'remaining-limit');
-  assert.match(await page.locator('#comparison-five-hour .comparison-message').innerText(), /주간.*0%/);
-  assert.match(await page.locator('#comparison-five-hour .comparison-time').innerText(), /KST/);
-  assert.match(await page.locator('#comparison-weekly .comparison-resets').innerText(), /5시간.*주간/);
-  assert.doesNotMatch(await page.locator('#comparison-weekly').innerText(), /100%|사용 가능/);
-  assert.equal(reads, 1, 'comparison must not issue an additional usage read');
-  await page.setViewportSize({ width: 375, height: 950 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  await page.screenshot({ path: join(outputDir, 'comparison-depleted-375.png'), fullPage: true });
-});
-
-test('comparison suspends after a failed refresh, recovers, and clears on logout', async t => {
-  if (skipWithoutBrowser(t)) return;
-  let signedOut = false;
-  const page = await openApp(t, { authState: () => signedOut ? 'signed-out' : 'chatgpt', read: n => {
-    if (n === 2) throw new AppError('TIMEOUT');
-    if (n === 4) { signedOut = true; throw new AppError('LOGIN_REQUIRED'); }
-    return structuredClone(longSnapshot);
-  } });
-  await page.locator('#refresh').click();
-  await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'refresh-needed');
-  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '확인 불가');
-  assert.match(await page.locator('#comparison-queried-at').innerText(), /KST/);
-  await page.locator('#refresh').click();
-  await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'complete');
-  await page.locator('#refresh').click();
-  await page.waitForFunction(() => document.querySelector('#start-time-comparison').dataset.state === 'not-ready');
-  assert.equal(await page.locator('#comparison-queried-at').innerText(), '확인 전');
-  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '확인 불가');
-});
-
-test('comparison requires fresh reset times at the reset boundary instead of advancing by five hours', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000); let reads = 0;
-  const page = await openApp(t, { clockTime: at * 1000, read: () => { reads++; return { ...longSnapshot, queriedAt: at, usageWindows: [
-    { ...longSnapshot.usageWindows[0], resetsAt: at + 60 }, { ...longSnapshot.usageWindows[1], resetsAt: at + 86400 },
-  ] }; } });
-  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'complete');
-  await page.clock.runFor(61000);
-  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'refresh-needed');
-  assert.equal(await page.locator('#comparison-five-hour .comparison-time').innerText(), '확인 불가');
-  assert.equal(reads, 1);
-});
-
 test('delayed refresh suspends usage decisions while retaining the last dashboard values', async t => {
   if (skipWithoutBrowser(t)) return;
   let release;
@@ -893,7 +385,6 @@ test('delayed refresh suspends usage decisions while retaining the last dashboar
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.body.dataset.loading === 'true');
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refreshing');
-  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'refreshing');
   assert.doesNotMatch(await page.locator('#recommendation').innerText(), /지금 사용 가능합니다|활용을 권장|잔여량을 활용하기 위한 권고/);
   assert.match(await page.locator('#usage-status').innerText(), /재조회 중.*마지막 성공 결과/);
   for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
@@ -901,7 +392,6 @@ test('delayed refresh suspends usage decisions while retaining the last dashboar
   release();
   await page.waitForFunction(() => document.body.dataset.loading === 'false');
   assert.notEqual(await page.locator('#recommendation').getAttribute('data-code'), 'refreshing');
-  assert.equal(await page.locator('#start-time-comparison').getAttribute('data-state'), 'complete');
 });
 
 test('waits for delayed session exchange and the initial credit read', async t => {
@@ -923,7 +413,7 @@ test('initial markup stays neutral while the session exchange is pending', async
   assert.match(initial, /조회.*안내/);
 });
 
-for (const tabCount of [2, 3]) test(`${tabCount} visible tabs share simultaneous forecast reads without BUSY or stale results`, async t => {
+for (const tabCount of [2, 3]) test(`${tabCount} visible tabs share simultaneous manual reads without BUSY or stale results`, async t => {
   if (skipWithoutBrowser(t)) return;
   const context = await browser.newContext(); t.after(() => context.close());
   const at = Math.floor(Date.now() / 1000); let reads = 0; let active = false; let block = false; let release;
@@ -940,18 +430,15 @@ for (const tabCount of [2, 3]) test(`${tabCount} visible tabs share simultaneous
     await page.clock.install({ time: new Date(at * 1000) }); await page.goto(first.url());
     await page.waitForFunction(() => document.querySelector('#notice').textContent === '조회가 완료되었습니다.');
   }
-  await Promise.all(pages.map(page => selectTab(page, 'forecast')));
-  await Promise.all(pages.map(page => page.locator('#forecast-toggle').click()));
   const before = reads; block = true;
   await Promise.all(pages.map(page => page.clock.runFor(300000)));
+  await Promise.all(pages.map(page => page.locator('#refresh').click()));
   for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.ok(release);
   for (const page of pages) assert.equal(await page.locator('body').getAttribute('data-loading'), 'true');
   release();
   for (const page of pages) {
     await page.waitForFunction(() => document.body.dataset.loading === 'false');
-    assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /2건/);
-    assert.notEqual(await page.locator('#forecast-five-hour').getAttribute('data-state'), 'stale');
     assert.equal(await page.locator('#notice').getAttribute('data-kind'), 'info');
   }
   assert.equal(reads - before, 1);
@@ -983,33 +470,6 @@ test('manual refresh and another tab alert validation share one usage read', asy
   await first.waitForFunction(() => document.body.dataset.loading === 'false');
   await second.waitForFunction(() => __usageNotices.length === 1);
   assert.equal(reads - before, 1);
-});
-
-test('BFCache transitions preserve forecasts while real page exit clears them', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000); let reads = 0;
-  const page = await openApp(t, { clockTime: at * 1000, read: () => {
-    const index = reads++;
-    return { ...longSnapshot, queriedAt: at + Math.min(index, 2) * 300, accountScope: 'bfcache-scope', usageWindows: [
-      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - index * 10, resetsAt: at + 18000 },
-    ] };
-  } });
-  await selectTab(page, 'forecast');
-  await page.locator('#forecast-toggle').click();
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'forecast');
-  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
-  assert.equal(await page.locator('#forecast-toggle').innerText(), '추세 끄기');
-  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /3건/);
-  const before = reads;
-  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
-  await page.waitForFunction(() => document.body.dataset.loading === 'false' && document.querySelector('#notice').dataset.kind === 'info');
-  assert.equal(reads, before + 1);
-  assert.equal(await page.locator('#forecast-toggle').innerText(), '추세 끄기');
-  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /3건/);
-  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })));
-  assert.equal(await page.locator('#forecast-toggle').innerText(), '추세 켜기');
-  assert.match(await page.locator('#forecast-five-hour .forecast-samples').innerText(), /0건/);
 });
 
 test('BFCache restoration discards the prior in-flight response and performs a fresh read', async t => {
@@ -1054,10 +514,10 @@ test('usage panels expose busy and pressed state and live summaries without repe
   const live = page.locator('#usage-announcement');
   assert.equal(await live.getAttribute('role'), 'status'); assert.equal(await live.getAttribute('aria-live'), 'polite'); assert.equal(await live.getAttribute('aria-atomic'), 'true');
   assert.match(await live.textContent(), /조회 완료.*65%.*50%/);
-  const panels = ['usage-panel', 'recommendation', 'start-time-comparison', 'usage-alerts', 'usage-forecast'];
+  const panels = ['usage-panel', 'recommendation', 'usage-alerts', 'expiry-calendar'];
   for (const id of panels) assert.equal(await page.locator(`#${id}`).getAttribute('aria-busy'), 'false');
-  for (const id of ['notifications-toggle', 'usage-alerts-toggle', 'forecast-toggle']) {
-    await selectTab(page, id === 'forecast-toggle' ? 'forecast' : 'alerts');
+  for (const id of ['notifications-toggle', 'usage-alerts-toggle']) {
+    await selectTab(page, 'alerts');
     const toggle = page.locator(`#${id}`); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
     await toggle.click(); await page.waitForFunction(id => document.getElementById(id).getAttribute('aria-pressed') === 'true', id);
     await toggle.click(); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
@@ -1098,25 +558,6 @@ test('reset and account boundaries announce once and clear old usage summaries',
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('계정 상태가 변경'));
   assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '확인 전');
-});
-
-test('forecast readiness and failure are announced on their state boundaries', async t => {
-  if (skipWithoutBrowser(t)) return;
-  const at = Math.floor(Date.now() / 1000); let reads = 0;
-  const page = await openApp(t, { clockTime: at * 1000, read: () => {
-    const index = reads++;
-    if (index === 3) throw new AppError('TIMEOUT');
-    return { ...longSnapshot, queriedAt: at + index * 300, accountScope: 'forecast-announcement', usageWindows: [
-      { ...longSnapshot.usageWindows[0], remainingPercent: 100 - index * 10, resetsAt: at + 18000 },
-    ] };
-  } });
-  await selectTab(page, 'forecast');
-  await page.locator('#forecast-toggle').click();
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour .forecast-samples').textContent.includes('2건'));
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#usage-announcement').textContent.includes('예상 소진 시각'));
-  assert.match(await page.locator('#usage-announcement').textContent(), /5시간 추세/);
-  await page.clock.runFor(300000); await page.waitForFunction(() => document.querySelector('#forecast-five-hour').dataset.state === 'stale');
-  assert.match(await page.locator('#usage-announcement').textContent(), /추세.*조회에 실패.*보류/);
 });
 
 test('notification storage failure is announced without raw errors or a pressed toggle', async t => {
