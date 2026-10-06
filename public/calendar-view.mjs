@@ -1,17 +1,19 @@
-import { calendarEvents, kstDateKey, monthDates, shiftMonth } from './expiry-calendar.mjs';
+import { calendarEvents, kstDateKey, monthDates, shiftMonth, upcomingEvents } from './expiry-calendar.mjs';
 import { formatKst, remainingTime } from './time.mjs';
 import { formatSummaryTime, formatSummaryRemaining } from './display.mjs';
 
 export function createCalendarView(root) {
   const get = id => root.querySelector(`#calendar-${id}`);
-  const grid = get('grid'), list = get('events');
+  const grid = get('grid'), list = get('events'), upcomingList = get('upcoming-events');
   const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
   let today = kstDateKey(Math.floor(Date.now() / 1000)), month = today.slice(0, 7), selected = today;
   let latest = null, options = {}, identity, gridKey;
   const eventRows = new Map();
+  const upcomingRows = new Map();
   function reset() {
     today = kstDateKey(Math.floor((options.now ?? Date.now()) / 1000)); month = today.slice(0, 7); selected = today; gridKey = undefined; identity = undefined;
     eventRows.clear(); list.replaceChildren();
+    upcomingRows.clear(); upcomingList.replaceChildren();
   }
   function createEventRow(event) {
     const element = document.createElement('li'); element.dataset.kind = event.kind;
@@ -25,6 +27,48 @@ export function createCalendarView(root) {
     details.append(summary, fullTime, fullRemaining);
     element.append(name, time, remaining, details);
     return { element, time, remaining, fullRemaining };
+  }
+  function createUpcomingRow(event) {
+    const element = document.createElement('li'); element.dataset.kind = event.kind;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'calendar-upcoming-button';
+    button.dataset.calendarUpcomingDate = event.date;
+    button.setAttribute('aria-label', `${event.title}, ${formatKst(event.at)}, 날짜 보기`);
+    const name = document.createElement('span'); name.className = 'calendar-upcoming-name'; name.textContent = event.title;
+    const time = document.createElement('time'); time.dateTime = new Date(event.at * 1000).toISOString();
+    const remaining = document.createElement('span'); remaining.className = 'calendar-upcoming-remaining';
+    button.append(name, time, remaining); element.append(button);
+    return { element, button, time, remaining };
+  }
+  function renderUpcoming(events, now) {
+    const upcoming = upcomingEvents(latest, now / 1000, events);
+    const desired = [], occurrences = new Map();
+    for (const event of upcoming) {
+      const signature = JSON.stringify([event.kind, event.number, event.at, event.title]);
+      const ordinal = occurrences.get(signature) ?? 0; occurrences.set(signature, ordinal + 1);
+      const key = `${signature}:${ordinal}`;
+      let row = upcomingRows.get(key);
+      if (!row) { row = createUpcomingRow(event); upcomingRows.set(key, row); }
+      setText(row.time, formatSummaryTime(event.at, { nowMs: now }));
+      setText(row.remaining, formatSummaryRemaining(event.at, { nowMs: now }));
+      desired.push({ key, row });
+    }
+    const active = document.activeElement;
+    let recoverFocus = false;
+    const keep = new Set(desired.map(item => item.key));
+    for (const [key, row] of upcomingRows) {
+      if (keep.has(key)) continue;
+      recoverFocus ||= row.element.contains(active);
+      row.element.remove(); upcomingRows.delete(key);
+    }
+    let cursor = upcomingList.firstChild;
+    for (const { row } of desired) {
+      if (row.element === cursor) cursor = cursor.nextSibling;
+      else upcomingList.insertBefore(row.element, cursor);
+    }
+    if (recoverFocus) grid.querySelector(`[data-calendar-date="${selected}"]`)?.focus();
+    get('upcoming-empty').hidden = upcoming.length > 0;
+    setText(get('upcoming-empty'), !latest ? '조회 후 가까운 일정을 표시합니다.'
+      : '확인된 미래 일정이 없습니다. 최신 상태는 새로고침으로 확인하세요.');
   }
   function render() {
     const now = options.now ?? Date.now();
@@ -61,6 +105,7 @@ export function createCalendarView(root) {
       }
       if (focusedDate) grid.querySelector(`[data-calendar-date="${focusedDate}"]`)?.focus();
     }
+    renderUpcoming(data.events, now);
     const desired = [], occurrences = new Map();
     for (const event of events) {
       const signature = JSON.stringify([event.kind, event.number, event.at, event.title]);
@@ -99,6 +144,10 @@ export function createCalendarView(root) {
   get('prev').addEventListener('click', () => select(`${shiftMonth(month, -1)}-01`));
   get('next').addEventListener('click', () => select(`${shiftMonth(month, 1)}-01`));
   get('today').addEventListener('click', () => select(today));
+  upcomingList.addEventListener('click', event => {
+    const button = event.target.closest('[data-calendar-upcoming-date]');
+    if (upcomingList.contains(button)) select(button.dataset.calendarUpcomingDate, true);
+  });
   grid.addEventListener('click', event => { const date = event.target.closest('[data-calendar-date]')?.dataset.calendarDate; if (date) select(date, true); });
   grid.addEventListener('keydown', event => {
     const date = event.target.closest('[data-calendar-date]')?.dataset.calendarDate;

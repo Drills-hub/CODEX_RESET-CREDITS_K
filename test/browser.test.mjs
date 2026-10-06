@@ -224,6 +224,7 @@ for (const colorScheme of ['light', 'dark']) test(`${colorScheme} theme meets da
       body: contrast(body.color, body.backgroundColor),
       muted: contrast(muted.color, body.backgroundColor),
       button: contrast(button.color, button.backgroundColor),
+      buttonColor: button.color, buttonBackground: button.backgroundColor, disabled: document.querySelector('#refresh').disabled,
       focus: contrast(button.outlineColor, body.backgroundColor),
     };
   });
@@ -248,7 +249,28 @@ test('mobile controls meet target size and the dashboard grows naturally without
   for (const size of sizes) assert.ok(size.height >= 44, `${size.id} target height ${size.height}px`);
 });
 
-test('tab and refreshed-value changes use the approved state animations', async t => {
+test('disabled refresh remains readable while a usage read is pending', async t => {
+  if (skipWithoutBrowser(t)) return;
+  let reads = 0, release;
+  const page = await openApp(t, { read: () => ++reads === 1 ? structuredClone(longSnapshot)
+    : new Promise(resolve => { release = () => resolve(structuredClone(longSnapshot)); }) });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#refresh').disabled);
+  for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(release, 'manual refresh should reach the pending usage read');
+  const ratio = await page.locator('#refresh').evaluate(node => {
+    const luminance = value => value.match(/[\d.]+/g).slice(0, 3).map(channel => Number(channel) / 255)
+      .map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4)
+      .reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+    const foreground = luminance(getComputedStyle(node).color);
+    const background = luminance(getComputedStyle(node).backgroundColor);
+    return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05);
+  });
+  assert.ok(ratio >= 4.5, `disabled refresh contrast ${ratio}`);
+  release(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
+});
+
+test('tab and refreshed-value changes update immediately without automatic animations', async t => {
   if (skipWithoutBrowser(t)) return;
   const context = await browser.newContext({ reducedMotion: 'no-preference' });
   t.after(() => context.close());
@@ -260,12 +282,18 @@ test('tab and refreshed-value changes use the approved state animations', async 
       return animate.call(this, keyframes, options);
     };
   });
-  const page = await openApp(t, { context });
+  let reads = 0;
+  const page = await openApp(t, { context, read: () => {
+    const remainingPercent = reads++ === 0 ? 65 : 64;
+    return { ...longSnapshot, usageWindows: [{ ...longSnapshot.usageWindows[0], remainingPercent, usedPercent: 100 - remainingPercent }, longSnapshot.usageWindows[1]] };
+  } });
   await page.evaluate(() => { globalThis.__dashboardAnimationDurations = []; });
   await selectTab(page, 'calendar');
-  const durations = await page.evaluate(() => globalThis.__dashboardAnimationDurations);
-  assert.ok(durations.includes(180), `tab indicator durations: ${durations}`);
-  assert.ok(durations.includes(200), `panel durations: ${durations}`);
+  assert.equal(await page.evaluate(() => globalThis.__dashboardAnimationDurations.length), 0);
+  assert.ok(await page.locator('[data-tab-indicator]').evaluate(element => element.style.width !== '0px'));
+  await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '64%');
+  assert.equal(await page.evaluate(() => globalThis.__dashboardAnimationDurations.length), 0);
 });
 
 test('usage dashboard renders percentages and reset times and preserves them on refresh failure', async t => {
@@ -282,7 +310,8 @@ test('usage dashboard renders percentages and reset times and preserves them on 
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#notice').dataset.kind === 'error');
   assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
-  assert.match(await page.locator('#usage-status').innerText(), /이전 조회|재조회/);
+  assert.match(await page.locator('#query-state').innerText(), /이전 조회 결과.*재조회 필요/);
+  assert.equal(await page.locator('#usage-status').isVisible(), false);
 });
 
 test('missing usage and login changes clear the dashboard without inventing zero percent', async t => {
@@ -296,6 +325,8 @@ test('missing usage and login changes clear the dashboard without inventing zero
   await page.waitForFunction(() => document.querySelector('#usage-five-hour .usage-percent')?.textContent === '확인 불가');
   assert.equal(await page.locator('#usage-five-hour progress').isVisible(), false);
   assert.match(await page.locator('#usage-five-hour .usage-reset').innerText(), /확인 불가/);
+  assert.equal(await page.locator('#usage-status').isVisible(), true);
+  assert.match(await page.locator('#usage-status').innerText(), /일부 사용 한도 정보를 확인할 수 없습니다/);
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.querySelector('#connection').textContent === '로그인 필요');
   assert.equal(await page.locator('#usage-weekly .usage-percent').innerText(), '확인 전');
@@ -386,7 +417,8 @@ test('delayed refresh suspends usage decisions while retaining the last dashboar
   await page.waitForFunction(() => document.body.dataset.loading === 'true');
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refreshing');
   assert.doesNotMatch(await page.locator('#recommendation').innerText(), /지금 사용 가능합니다|활용을 권장|잔여량을 활용하기 위한 권고/);
-  assert.match(await page.locator('#usage-status').innerText(), /재조회 중.*마지막 성공 결과/);
+  assert.match(await page.locator('#query-state').innerText(), /재조회 중.*마지막 성공 결과/);
+  assert.equal(await page.locator('#usage-status').isVisible(), false);
   for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.ok(release);
   release();
@@ -449,6 +481,20 @@ test('manual refresh and another tab alert validation share one usage read', asy
   const context = await browser.newContext(); t.after(() => context.close());
   await context.addInitScript(() => {
     globalThis.__usageNotices = [];
+    const NativeChannel = BroadcastChannel;
+    globalThis.BroadcastChannel = class extends NativeChannel {
+      constructor(name) {
+        super(name);
+        if (name === 'reset-check.usage-read.channel.v1') this.addEventListener('message', ({ data }) => {
+          if (data?.type === 'request') __usageReadRequestsReceived.push(data.id);
+        });
+      }
+      postMessage(data) {
+        if (this.name === 'reset-check.usage-read.channel.v1' && data?.type === 'request') __usageReadRequestsSent.push(data.id);
+        return super.postMessage(data);
+      }
+    };
+    globalThis.__usageReadRequestsSent = []; globalThis.__usageReadRequestsReceived = [];
     Object.defineProperty(globalThis, 'Notification', { configurable: true, value: Object.assign(function (title, options) { __usageNotices.push({ title, ...options }); },
       { permission: 'granted', requestPermission: async () => 'granted' }) });
   });
@@ -462,9 +508,13 @@ test('manual refresh and another tab alert validation share one usage read', asy
   await selectTab(second, 'alerts');
   // Keep the first client manual-only while the second validates a notification.
   await first.evaluate(() => { Notification.permission = 'denied'; });
+  const postedBefore = await second.evaluate(() => __usageReadRequestsSent.length);
   const before = reads; block = true;
   await Promise.all([first.locator('#refresh').click(), second.locator('#usage-alerts-toggle').click()]);
   await second.waitForFunction(() => document.body.dataset.loading === 'true');
+  await second.waitForFunction(count => __usageReadRequestsSent.length > count, postedBefore);
+  const requestId = await second.evaluate(count => __usageReadRequestsSent[count], postedBefore);
+  await first.waitForFunction(id => __usageReadRequestsReceived.includes(id), requestId);
   for (let attempt = 0; !release && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.ok(release); release();
   await first.waitForFunction(() => document.body.dataset.loading === 'false');

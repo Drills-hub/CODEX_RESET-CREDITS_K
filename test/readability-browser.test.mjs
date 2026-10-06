@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { createApplication } from '../lib/http.mjs';
 import { AppError } from '../lib/errors.mjs';
 
 const N = 1791072000, H = 3600, D = 86400;
+const outputDir = process.env.VISUAL_QA_OUTPUT_DIR || await mkdtemp(join(tmpdir(), 'limit-check-readability-qa-'));
+const screenshotDir = join(outputDir, 'readability-ui-ux');
+await mkdir(screenshotDir, { recursive: true });
 const fixture = () => ({ queriedAt: N, accountScope: 'readability-account', revision: 0, availableCount: 2, detailState: 'complete', ordinaryUsageAllowed: true,
   credits: [{ number: 1, title: '첫 리셋권', status: 'available', resetType: 'codexRateLimits', grantedAt: N - D, expiresAt: N + 12.5 * H, expiryState: 'known' },
     { number: 2, title: '다음 리셋권', status: 'available', resetType: 'codexRateLimits', grantedAt: N - D, expiresAt: N + 3 * D, expiryState: 'known' }],
@@ -36,7 +41,7 @@ async function refresh(page) {
 
 test('summary shares the exact minute deadline while keeping detailed reasoning in one progressive-disclosure block', async t => {
   const { page } = await open(t);
-  assert.equal(await page.locator('#recommendation-title').innerText(), '20시 사용을 추천합니다!');
+  assert.equal(await page.locator('#recommendation-title').innerText(), '20시 사용을 추천합니다.');
   assert.equal(await page.locator('#recommendation-target').innerText(), '오늘 20:30');
   assert.equal(await page.locator('#recommendation-reason').innerText(), '현재 한도를 가능한 만큼 사용한 뒤 권장 마감에 확인하세요.');
   assert.equal(await page.locator('#reset-recommendation').count(), 0);
@@ -47,6 +52,54 @@ test('summary shares the exact minute deadline while keeping detailed reasoning 
   assert.match(await page.locator('#recommendation-details').innerText(), /대상 리셋권/);
   assert.equal(await page.locator('#recommendation-queried-at').count(), 0);
   assert.equal(await page.locator('#display-timezone').innerText(), '모든 시각은 KST');
+});
+test('official usage guidance stays collapsed, preserves its state on refresh, and does not trigger reads', async t => {
+  const { page, reads } = await open(t);
+  const guide = page.locator('#usage-rules');
+  assert.equal(await guide.count(), 1);
+  assert.equal(await guide.getAttribute('open'), null);
+  const links = await guide.locator('a').evaluateAll(nodes => nodes.map(node => ({
+    href: node.href, target: node.target, rel: node.rel,
+  })));
+  assert.deepEqual(links, [
+    { href: 'https://learn.chatgpt.com/docs/pricing', target: '_blank', rel: 'noopener noreferrer' },
+    { href: 'https://learn.chatgpt.com/docs/sign-in-with-chatgpt', target: '_blank', rel: 'noopener noreferrer' },
+  ]);
+  assert.equal(await page.locator('#query-state').evaluate(node => node.classList.contains('sr-only')), true);
+  assert.equal(await page.locator('#usage-status').isVisible(), false);
+  await guide.locator('summary').press('Enter');
+  assert.equal(await guide.getAttribute('open'), '');
+  assert.match(await guide.innerText(), /ChatGPT Work/);
+  assert.match(await guide.innerText(), /사용 크레딧과는 다릅니다/);
+  await page.screenshot({ path: join(screenshotDir, 'usage-rules-open-light-375.png'), fullPage: true });
+  await page.clock.runFor(5000);
+  assert.equal(reads(), 1);
+  await refresh(page);
+  assert.equal(reads(), 2);
+  assert.equal(await guide.getAttribute('open'), '');
+});
+test('notification descriptions stay before their controls on mobile and beside them on desktop', async t => {
+  const { page } = await open(t, { width: 1280 });
+  await page.locator('#tab-alerts').click();
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 950 });
+    const layout = await page.locator('#panel-alerts .notifications').evaluateAll(sections => sections.map(section => {
+      const copy = section.querySelector('.notification-copy');
+      const button = section.querySelector('button');
+      const text = section.querySelector('p');
+      if (!copy || !button || !text) return null;
+      const copyBox = copy.getBoundingClientRect(), buttonBox = button.getBoundingClientRect();
+      return { textBeforeButton: Boolean(text.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING),
+        copyRight: copyBox.right, copyBottom: copyBox.bottom, buttonLeft: buttonBox.left, buttonTop: buttonBox.top };
+    }));
+    assert.equal(layout.length, 2);
+    for (const item of layout) {
+      assert.ok(item, 'notification title and explanation should share a copy region');
+      assert.equal(item.textBeforeButton, true);
+      if (width >= 768) assert.ok(item.buttonLeft > item.copyRight, `desktop button should sit right of explanation: ${JSON.stringify(item)}`);
+      else assert.ok(item.buttonTop >= item.copyBottom, `mobile button should follow explanation: ${JSON.stringify(item)}`);
+    }
+  }
 });
 test('full reset and query timestamps remain keyboard accessible and preserve label/value semantics', async t => {
   const { page } = await open(t);
@@ -60,7 +113,10 @@ test('full reset and query timestamps remain keyboard accessible and preserve la
   await page.locator('#tab-credits').click();
   const pairs = await page.locator('.credit').first().locator('dt').evaluateAll(nodes => nodes.map(n => [n.textContent, n.nextElementSibling.textContent]));
   assert.ok(pairs.some(([label, value]) => label === '지급 시각' && value.includes('2026-10-03')));
-  assert.ok(pairs.some(([label, value]) => label === '상태' && value === '사용 가능'));
+  assert.equal(pairs.some(([label]) => label === '상태'), false);
+  assert.equal(await page.locator('.credit').first().locator('.badge').innerText(), '사용 가능');
+  assert.equal(await page.locator('.credit').first().locator('.badge').getAttribute('role'), 'img');
+  assert.equal(await page.locator('.credit').first().locator('.badge').getAttribute('aria-label'), '리셋권 상태: 사용 가능');
 });
 test('partial coverage and unknown expiry remain visible in both recommendation surfaces', async t => {
   const { page } = await open(t, { read: () => ({ ...fixture(), detailState: 'partial', credits: [...fixture().credits, { number: 3, status: 'available', expiryState: 'unknown' }] }) });
@@ -72,7 +128,7 @@ test('partial coverage and unknown expiry remain visible in both recommendation 
 });
 test('a successful read after the safety deadline labels the past deadline without replacing it with now', async t => {
   const { page } = await open(t, { now: N + 12 * H, read: () => ({ ...fixture(), queriedAt: N + 12 * H, usageWindows: fixture().usageWindows.map(w => ({ ...w, resetsAt: N + D })) }) });
-  assert.equal(await page.locator('#recommendation-title').innerText(), '지금 사용을 추천합니다!');
+  assert.equal(await page.locator('#recommendation-title').innerText(), '지금 사용을 추천합니다.');
   assert.match(await page.locator('#recommendation-target').innerText(), /권장 마감 경과: 오늘 20:30/);
   assert.doesNotMatch(await page.locator('#recommendation-target').innerText(), /21:00/);
 });
@@ -86,9 +142,9 @@ test('query state separates first loading, first failure, previous data and succ
   rejectRead(new AppError('TIMEOUT'));
   await page.waitForFunction(() => document.body.dataset.loading === 'false');
   assert.match(await page.locator('#query-state').innerText(), /조회 실패/);
-  await refresh(page); assert.match(await page.locator('#query-state').innerText(), /마지막 조회 기준/);
+  await refresh(page); assert.equal(await page.locator('#query-state').evaluate(node => node.classList.contains('sr-only')), true);
   await refresh(page); assert.match(await page.locator('#query-state').innerText(), /이전 조회 결과/);
-  assert.equal(await page.locator('#recommendation-target').innerText(), '해당 없음');
+  assert.equal(await page.locator('.recommendation-timing').isVisible(), false);
   assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '65%');
   await refresh(page); assert.match(await page.locator('#recommendation-target').innerText(), /오늘 20:30/);
 });
@@ -97,12 +153,14 @@ test('zero credits, missing information, restriction and logout keep different m
   const { page } = await open(t, { read: n => n === 1 ? fixture() : n === 2 ? { ...fixture(), availableCount: 0, credits: [] } : n === 3 ? { ...fixture(), detailState: 'unavailable', availableCount: null, credits: [] } : { ...fixture(), ordinaryUsageAllowed: false },
     status: () => ({ connected: true, authState: signedOut ? 'signed-out' : 'chatgpt', revision: signedOut ? 1 : 0 }) });
   await refresh(page); assert.equal(await page.locator('#count').innerText(), '0');
+  assert.equal(await page.locator('.recommendation-timing').isVisible(), false);
   await refresh(page); assert.equal(await page.locator('#count').innerText(), '확인 불가');
-  await refresh(page); assert.match(await page.locator('#recommendation-reason').innerText(), /일반 사용을 제한/);
+  await refresh(page); assert.match(await page.locator('#recommendation-title').innerText(), /일반 사용을 제한/);
+  assert.match(await page.locator('#recommendation-reason').innerText(), /사용 허용 여부/);
   assert.equal(await page.locator('#recommendation').getAttribute('data-tone'), 'error');
   signedOut = true; await page.clock.runFor(5000);
   await page.waitForFunction(() => document.querySelector('#count').textContent === '확인 전');
-  assert.equal(await page.locator('#recommendation-target').innerText(), '해당 없음');
+  assert.equal(await page.locator('.recommendation-timing').isVisible(), false);
   assert.equal(await page.locator('.credit').count(), 0);
 });
 
@@ -124,11 +182,12 @@ for (const theme of ['light', 'dark']) test(`readability layout ${theme} preserv
     });
     assert.equal(sizes.h1, width < 768 ? 24 : 28, `${width}px page title`);
     assert.equal(sizes.balance, width < 768 ? 32 : 40);
-    assert.equal(sizes.heading, 20); assert.equal(sizes.body, 16); assert.equal(sizes.time, 14); assert.equal(sizes.between, 12);
-    assert.equal(sizes.fullTimeLine, 21); assert.equal(sizes.fullTimerLine, 21); assert.equal(sizes.metaLine, 19.5); assert.equal(sizes.noteLine, 19.5);
+    assert.equal(sizes.heading, 20); assert.equal(sizes.body, 16); assert.equal(sizes.time, 18); assert.equal(sizes.between, 0);
+    assert.equal(sizes.fullTimeLine, 21); assert.equal(sizes.fullTimerLine, 21); assert.equal(sizes.metaLine, 21); assert.equal(sizes.noteLine, 21);
     assert.equal(sizes.overflow, false);
     if (width >= 1024) { assert.ok(Math.abs(sizes.usage.top - sizes.recommendation.top) < 1); assert.ok(sizes.usage.width > sizes.recommendation.width); }
     else assert.ok(sizes.recommendation.top >= sizes.usage.bottom);
+    if (width === 375 || width === 1280) await page.screenshot({ path: join(screenshotDir, `summary-${theme}-${width}.png`), fullPage: true });
     await page.locator('#tab-calendar').click();
     const calendar = await page.evaluate(() => {
       const rect = id => document.getElementById(id)?.getBoundingClientRect().toJSON();
@@ -136,15 +195,15 @@ for (const theme of ['light', 'dark']) test(`readability layout ${theme} preserv
       return { month: rect('calendar-month-panel'), agenda: rect('calendar-agenda-panel'),
         overflow: document.documentElement.scrollWidth > innerWidth,
         controls: buttons.map(n => ({ date: Boolean(n.dataset.calendarDate), width: n.getBoundingClientRect().width, height: n.getBoundingClientRect().height })),
-        countFont: parseFloat(getComputedStyle(document.querySelector('.calendar-count')).fontSize) };
+        countFont: parseFloat(getComputedStyle(document.querySelector('.calendar-count')).fontSize),
+        upcoming: rect('calendar-upcoming') };
     });
-    assert.ok(calendar.month && calendar.agenda, 'calendar selection and agenda have stable layout regions');
-    assert.equal(calendar.overflow, false); assert.equal(calendar.countFont, 13);
+    assert.ok(calendar.month && calendar.agenda && calendar.upcoming, 'calendar, upcoming events and selected date have stable regions');
+    assert.equal(calendar.overflow, false); assert.equal(calendar.countFont, 14);
     for (const box of calendar.controls) { assert.ok(box.width >= (box.date ? 24 : 44)); assert.ok(box.height >= (box.date ? 56 : 44)); }
-    if (width >= 1024) assert.ok(Math.abs(calendar.month.top - calendar.agenda.top) < 1);
-    else assert.ok(calendar.agenda.top >= calendar.month.bottom);
-    await mkdir('.tmp/check/readability-ui-ux', { recursive: true });
-    await page.screenshot({ path: `.tmp/check/readability-ui-ux/calendar-${theme}-${width}.png`, fullPage: true });
+    if (width >= 1024) assert.ok(Math.abs(calendar.month.top - calendar.upcoming.top) < 1);
+    else assert.ok(calendar.upcoming.top >= calendar.month.bottom);
+    await page.screenshot({ path: join(screenshotDir, `calendar-${theme}-${width}.png`), fullPage: true });
   }
 });
 
@@ -177,9 +236,8 @@ for (const theme of ['light', 'dark']) test(`readability ${theme} distinguishes 
     assert.equal(await page.locator('#recommendation-urgency').isVisible(), tone === 'deadline');
     if (tone === 'neutral') {
       const colors = await page.evaluate(() => ({ tone: document.querySelector('#recommendation').dataset.tone,
-        actual: getComputedStyle(document.querySelector('#recommendation')).backgroundColor,
-        expected: getComputedStyle(document.querySelector('#main-status-card')).backgroundColor }));
-      assert.equal(colors.actual, colors.expected, JSON.stringify(colors));
+        actual: getComputedStyle(document.querySelector('#recommendation')).backgroundColor }));
+      assert.equal(colors.actual, 'rgba(0, 0, 0, 0)', JSON.stringify(colors));
     }
     for (const entry of await readableContrasts(page, ['#recommendation-title', '#recommendation-reason', '#recommendation-target', '#query-state'])) {
       assert.ok(entry.ratio >= 4.5, `${theme} ${tone} ${JSON.stringify(entry)}`);
@@ -188,8 +246,12 @@ for (const theme of ['light', 'dark']) test(`readability ${theme} distinguishes 
   }
   for (let i = 0; !release && i < 50; i++) await new Promise(resolve => setTimeout(resolve, 10));
   release(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  await page.locator('#usage-rules summary').click();
+  for (const entry of await readableContrasts(page, ['#usage-rules summary', '#usage-rules dt', '#usage-rules dd', '#usage-rules a'])) {
+    assert.ok(entry.ratio >= 4.5, `${theme} rules ${JSON.stringify(entry)}`);
+  }
   await page.locator('#tab-calendar').click();
-  for (const entry of await readableContrasts(page, ['#calendar-legend span', '#calendar-events strong', '#calendar-selected', '.calendar-date[aria-pressed="true"]', '.calendar-count'])) assert.ok(entry.ratio >= 4.5, JSON.stringify(entry));
+  for (const entry of await readableContrasts(page, ['#calendar-legend span', '#calendar-upcoming-title', '.calendar-upcoming-name', '.calendar-upcoming-button time', '.calendar-upcoming-remaining', '#calendar-events strong', '#calendar-selected', '.calendar-date[aria-pressed="true"]', '.calendar-count'])) assert.ok(entry.ratio >= 4.5, `${theme} calendar ${JSON.stringify(entry)}`);
 });
 
 test('calendar rows preserve node identity, focus and open exact-time details through ticks and identical reads', async t => {
@@ -214,6 +276,27 @@ test('calendar rows preserve node identity, focus and open exact-time details th
   await refresh(page);
   assert.equal(await page.evaluate(() => __calendarRow === document.querySelector('#calendar-events [data-kind="credit-expiry"]') && __calendarDetails.open), true);
   assert.match(await page.locator('#calendar-selected').innerText(), /2026-10-04 일정 · 2건/);
+});
+test('upcoming rows keep focus through ticks and recover it when an event time passes', async t => {
+  const sample = fixture();
+  sample.credits = [
+    { ...sample.credits[0], title: '곧 만료되는 리셋권', expiresAt: N + 60 },
+    { ...sample.credits[1], title: '다음 리셋권', expiresAt: N + 3 * D },
+  ];
+  const { page, reads } = await open(t, { read: () => sample });
+  await page.locator('#tab-calendar').click();
+  const soon = page.locator('#calendar-upcoming-events [data-kind="credit-expiry"] button').first();
+  await soon.focus();
+  await page.evaluate(() => { globalThis.__upcomingButton = document.activeElement; });
+  await page.clock.runFor(5000);
+  assert.equal(await page.evaluate(() => document.activeElement === __upcomingButton), true);
+  assert.equal(reads(), 1);
+  await page.clock.runFor(55000);
+  assert.equal(await page.locator('#calendar-upcoming-events [data-calendar-upcoming-date]').count(), 3);
+  assert.doesNotMatch(await page.locator('#calendar-upcoming-events').innerText(), /곧 만료되는 리셋권/);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.calendarDate), '2026-10-04');
+  assert.match(await page.locator('#calendar-upcoming-events').innerText(), /다음 리셋권/);
+  assert.equal(reads(), 1);
 });
 test('calendar reconciles duplicate keys, removals and title changes while recovering focus from removed details', async t => {
   let value = fixture(), deferred = false, release;
@@ -334,6 +417,6 @@ for (const mode of ['text-200', 'text-spacing']) for (const theme of ['light', '
       if (tab === 'credits') assert.match(geometry.text, /2026-10-04/);
       if (tab === 'calendar') assert.match(geometry.text, /2026-10-04 21:30:00 KST/);
     }
-    await page.screenshot({ path: `.tmp/check/readability-ui-ux/${mode}-${theme}-320.png`, fullPage: true });
+    await page.screenshot({ path: join(screenshotDir, `${mode}-${theme}-320.png`), fullPage: true });
   });
 }

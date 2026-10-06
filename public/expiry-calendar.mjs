@@ -37,3 +37,8 @@ export function calendarEvents(snapshot) {
   events.sort((a, b) => a.at - b.at || order[a.kind] - order[b.kind] || a.number - b.number);
   return { state: 'ready', events, notes };
 }
+
+export function upcomingEvents(snapshot, nowSeconds = Date.now() / 1000, events = calendarEvents(snapshot).events) {
+  if (!Number.isFinite(nowSeconds) || nowSeconds < 0 || !Array.isArray(events)) return [];
+  return events.filter(event => event.at > nowSeconds).slice(0, 3);
+}

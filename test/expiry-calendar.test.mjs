@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calendarEvents, kstDateKey, monthDates, shiftMonth } from '../public/expiry-calendar.mjs';
+import { calendarEvents, kstDateKey, monthDates, shiftMonth, upcomingEvents } from '../public/expiry-calendar.mjs';
 const N = 1791072000;
 test('KST groups both sides of midnight and leap-year months', () => {
   assert.equal(kstDateKey(Date.parse('2026-12-31T14:59:59Z') / 1000), '2026-12-31');
@@ -22,6 +22,28 @@ test('same-time events sort credits then five-hour then weekly without recurring
   assert.deepEqual(value.events.slice(0, 2).map(e => e.number), [1, 2]);
   assert.ok(value.events.every(e => e.date === '2026-10-04'));
   assert.match(value.notes.join(' '), /조회된 항목 기준.*만료 없음/);
+});
+test('upcoming events return at most three future calendar events in the existing order', () => {
+  const snapshot = { detailState: 'complete', credits: [
+    { number: 1, title: '첫 리셋권', status: 'available', expiryState: 'known', expiresAt: N + 12 * 3600 },
+    { number: 2, title: '다음 리셋권', status: 'available', expiryState: 'known', expiresAt: N + 3 * 86400 },
+    { number: 3, title: '지난 리셋권', status: 'available', expiryState: 'known', expiresAt: N },
+    { number: 4, title: '사용 완료', status: 'redeemed', expiryState: 'known', expiresAt: N + 60 },
+    { number: 5, title: '기한 없음', status: 'available', expiryState: 'none', expiresAt: null },
+  ], usageWindows: [
+    { kind: 'five-hour', resetsAt: N + 5 * 3600 },
+    { kind: 'weekly', resetsAt: N + 5 * 86400 },
+  ] };
+  assert.deepEqual(upcomingEvents(snapshot, N).map(({ kind, number, at }) => [kind, number, at]), [
+    ['five-hour-reset', null, N + 5 * 3600],
+    ['credit-expiry', 1, N + 12 * 3600],
+    ['credit-expiry', 2, N + 3 * 86400],
+  ]);
+  assert.deepEqual(upcomingEvents(snapshot, N + 3 * 86400).map(({ kind, at }) => [kind, at]), [
+    ['weekly-reset', N + 5 * 86400],
+  ]);
+  assert.deepEqual(upcomingEvents(null, N), []);
+  assert.deepEqual(upcomingEvents(snapshot, NaN), []);
 });
 test('unknown, unavailable and count-only details are not converted into dates', () => {
   assert.equal(calendarEvents(null).state, 'not-ready');

@@ -31,8 +31,8 @@ const summaries = {
   deadline: ['deadline', '현재 한도를 가능한 만큼 사용한 뒤 권장 마감에 확인하세요.'],
   'use-now': ['deadline', '만료 전에 최신 상태를 확인하고 사용을 검토하세요.'],
   refreshing: ['pending', '조회가 완료되면 추천을 다시 안내합니다.'],
-  'refresh-needed': ['error', '최신 상태를 재조회해 주세요.'],
-  'server-restricted': ['error', '서버가 일반 사용을 제한했습니다. 최신 상태를 확인하세요.'],
+  'refresh-needed': ['error', '이전 조회 결과로 사용 시점을 판단할 수 없습니다.'],
+  'server-restricted': ['error', '새로고침 후 실제 사용 허용 여부를 확인하세요.'],
 };
 
 export function buildRecommendationDisplay(recommendation, snapshot) {
@@ -41,7 +41,7 @@ export function buildRecommendationDisplay(recommendation, snapshot) {
   const unknown = (snapshot?.credits ?? []).some(row => row.status === 'available'
     && (row.expiryState === 'unknown' || row.expiryState === 'known' && kstDateKey(row.expiresAt) === null));
   return {
-    title: recommendation.title, summaryReason, detailReason: recommendation.reason,
+    title: recommendation.title.replace(/!$/u, '.'), summaryReason, detailReason: recommendation.reason,
     deadlineAt: recommendation.deadlineAt, tone,
     scopeNote: [partial ? '조회된 항목 기준' : '', unknown ? '일부 만료 시각 확인 불가' : ''].filter(Boolean).join(' · '),
   };

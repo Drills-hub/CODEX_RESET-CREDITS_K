@@ -157,10 +157,13 @@ function render() {
       const header = node('div', undefined, 'credit-header');
       const title = node('div');
       title.append(node('span', `리셋권 ${String(credit.number).padStart(2, '0')}`, 'credit-number'), node('h3', credit.title));
-      header.append(title, node('span', labels[credit.status] ?? labels.unknown, 'badge'));
+      const badge = node('span', labels[credit.status] ?? labels.unknown, 'badge');
+      badge.setAttribute('role', 'img');
+      badge.setAttribute('aria-label', `리셋권 상태: ${labels[credit.status] ?? labels.unknown}`);
+      header.append(title, badge);
       const list = node('dl');
       const expiry = credit.expiryState === 'none' ? '만료 없음' : credit.expiryState === 'unknown' ? '만료 시각 확인 불가' : formatKst(credit.expiresAt);
-      list.append(node('dt', '상태'), node('dd', labels[credit.status] ?? labels.unknown), node('dt', '지급 시각'), node('dd', formatKst(credit.grantedAt)), node('dt', '만료 시각'), node('dd', expiry), node('dt', '남은 시간'));
+      list.append(node('dt', '지급 시각'), node('dd', formatKst(credit.grantedAt)), node('dt', '만료 시각'), node('dd', expiry), node('dt', '남은 시간'));
       const remaining = node('dd', '', 'remaining');
       remaining.dataset.number = credit.number;
       list.append(remaining); article.append(header, list); elements.credits.append(article);
@@ -178,6 +181,8 @@ function tick() {
     : snapshot && (state.usageStale || !state.connected) ? '이전 조회 결과 · 재조회 필요'
     : !snapshot ? '조회 전 · 연결 확인 중' : '마지막 조회 기준';
   setText(elements['query-state'], queryState);
+  const queryStateRelevant = !snapshot || state.loading || state.usageStale || !state.connected || state.kind === 'error';
+  elements['query-state'].classList.toggle('sr-only', !queryStateRelevant);
   renderUsage(snapshot);
   renderRecommendation(snapshot);
   calendar.update(snapshot, { loading: state.loading, stale: state.usageStale || !state.connected });
@@ -190,6 +195,15 @@ function tick() {
     row.textContent = credit.expiryState === 'none' ? '만료 없음' : credit.expiryState === 'unknown' ? '만료 시각 확인 불가' : remainingTime(credit.expiresAt);
     row.dataset.expired = String(credit.expiryState === 'known' && credit.expiresAt * 1000 <= Date.now());
   }
+  const restricted = snapshot?.ordinaryUsageAllowed === false;
+  const completeUsage = snapshot?.usageWindows?.length === 2
+    && snapshot.usageWindows.every(row => row.state === 'complete');
+  const incompleteUsage = Boolean(snapshot && !completeUsage);
+  const resetPassed = snapshot?.usageWindows?.some(row => Number.isSafeInteger(row.resetsAt)
+    && row.resetsAt * 1000 <= Date.now()) ?? false;
+  const usageStatusRelevant = Boolean(snapshot && (restricted
+    || !state.loading && !state.usageStale && (resetPassed || incompleteUsage)));
+  elements['usage-status'].hidden = !usageStatusRelevant;
 }
 function renderUsage(snapshot) {
   const now = Date.now();
@@ -239,11 +253,13 @@ function renderRecommendation(snapshot) {
   setText(elements['recommendation-reason'], display.summaryReason);
   setText(elements['recommendation-target'], display.deadlineAt === null ? '해당 없음' : deadlinePrefix + formatSummaryTime(display.deadlineAt));
   setText(elements['recommendation-remaining'], display.deadlineAt === null ? '' : formatSummaryRemaining(display.deadlineAt));
+  elements['recommendation-target'].parentElement.hidden = display.deadlineAt === null;
   setText(elements['recommendation-scope-note'], display.scopeNote);
   setText(elements['recommendation-detail-reason'], display.detailReason);
   setText(document.getElementById('recommendation-credit'), recommendation.credit ? `리셋권 ${recommendation.credit.number} · ${recommendation.credit.title}` : '해당 없음');
   setText(document.getElementById('recommendation-expiry'), recommendation.credit ? formatKst(recommendation.credit.expiresAt) : '해당 없음');
   setText(document.getElementById('recommendation-credit-remaining'), recommendation.credit ? remainingTime(recommendation.credit.expiresAt) : '');
+  document.querySelector('#recommendation-details .reset-details').hidden = !recommendation.credit;
   elements['recommendation-urgency'].hidden = display.tone !== 'deadline';
   elements['recommendation-disclaimer'].textContent = ['free-use', 'prepare', 'deadline', 'use-now'].includes(recommendation.code)
     ? '만료 기한 기준 권고입니다. 실제 사용 전에 최신 상태를 확인하세요.' : '최신 상태를 확인한 뒤 사용 시점을 다시 안내합니다.';

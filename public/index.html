@@ -11,9 +11,7 @@
 <body>
   <main class="dashboard">
     <header class="page-header">
-      <h1>Codex 사용량과 리셋권</h1>
-      <p class="intro">5시간·주간 잔여량과 리셋권 만료 시각을 확인합니다.</p>
-      <p id="display-timezone" class="muted">모든 시각은 KST</p>
+      <div class="page-title"><h1>Codex 사용량과 리셋권</h1><p id="display-timezone" class="muted">모든 시각은 KST</p></div>
       <section class="toolbar" aria-label="조회 상태">
         <span id="connection" class="connection">연결 확인 중</span>
         <details id="query-time-details" class="query-meta"><summary>마지막 조회 <span id="queried-at">확인 전</span></summary><p id="queried-at-full">확인 전</p></details>
@@ -28,7 +26,6 @@
       <div class="status-overview">
       <section id="usage-panel" class="usage" aria-labelledby="usage-title" aria-busy="false">
         <h3 id="usage-title" class="sr-only">잔여 사용량</h3>
-        <p id="usage-status" class="muted">조회 후 사용 한도를 표시합니다.</p>
         <div class="usage-grid">
           <article id="usage-five-hour" class="usage-window" aria-labelledby="usage-five-hour-title">
             <h3 id="usage-five-hour-title">5시간 한도</h3>
@@ -45,6 +42,11 @@
             <details id="usage-weekly-details" class="time-details"><summary>정확한 시각</summary><p class="usage-reset-full">확인 불가</p><p class="usage-remaining-full muted"></p></details>
           </article>
         </div>
+        <p id="usage-status" class="muted" hidden>조회 후 사용 한도를 표시합니다.</p>
+        <section class="summary" aria-label="리셋권 요약">
+          <div class="balance"><p class="label">사용 가능한 리셋권</p><div><strong id="count">확인 전</strong><span class="unit">개</span></div></div>
+          <div class="next-expiry"><p class="label">조회된 리셋권 중 가장 가까운 만료</p><p id="nearest">아직 조회하지 않았습니다.</p><p id="nearest-remaining" class="muted"></p></div>
+        </section>
       </section>
       <section id="recommendation" class="recommendation" aria-labelledby="recommendation-heading" aria-busy="false">
         <h3 id="recommendation-heading">리셋 추천</h3>
@@ -58,10 +60,19 @@
         <p id="recommendation-disclaimer" class="recommendation-meta">조회가 완료되면 최신 사용량을 기준으로 안내합니다.</p>
       </section>
       </div>
-      <section class="summary" aria-label="리셋권 요약">
-        <div class="balance"><p class="label">사용 가능한 리셋권</p><div><strong id="count">확인 전</strong><span class="unit">개</span></div></div>
-        <div class="next-expiry"><p class="label">조회된 리셋권 중 가장 가까운 만료</p><p id="nearest">아직 조회하지 않았습니다.</p><p id="nearest-remaining" class="muted"></p></div>
-      </section>
+      <details id="usage-rules" class="usage-rules">
+        <summary>한도·리셋권 안내</summary>
+        <dl class="usage-rules-list">
+          <div><dt>사용량 범위</dt><dd>요금제에 따라 Codex와 ChatGPT Work 등의 사용량이 공유될 수 있습니다. 현재 한도와 리셋 시각은 계정의 사용량 설정에서 확인하세요.</dd></div>
+          <div><dt>리셋권과 사용 크레딧</dt><dd>계정에 저장된 리셋권은 적용 가능한 한도를 갱신하는 데 사용됩니다. 추가 사용량을 결제하는 사용 크레딧과는 다릅니다.</dd></div>
+          <div><dt>리셋 적용 후 확인</dt><dd>리셋 적용 뒤에는 새로고침하여 바뀐 잔여율과 리셋 시각을 확인하세요. 만료 정보가 없는 항목의 기한은 추정하지 않습니다.</dd></div>
+        </dl>
+        <nav class="usage-rules-links" aria-label="공식 사용량 안내">
+          <a href="https://learn.chatgpt.com/docs/pricing" target="_blank" rel="noopener noreferrer">공식 사용량 안내<span class="sr-only"> (새 탭에서 열림)</span></a>
+          <a href="https://learn.chatgpt.com/docs/sign-in-with-chatgpt" target="_blank" rel="noopener noreferrer">연결된 앱의 사용량 안내<span class="sr-only"> (새 탭에서 열림)</span></a>
+        </nav>
+        <p class="usage-rules-note">계정별 옵션은 ChatGPT 설정 &gt; 사용량에서 확인하세요.</p>
+      </details>
     </section>
 
     <nav class="tabs-wrap" aria-label="사용량 상세 정보">
@@ -89,7 +100,14 @@
           <div id="calendar-grid" class="calendar-grid" role="group" aria-label="일정 날짜 선택"></div>
           </div>
           <div id="calendar-agenda-panel">
+          <section id="calendar-upcoming" aria-labelledby="calendar-upcoming-title">
+            <h3 id="calendar-upcoming-title">가까운 일정</h3>
+            <ul id="calendar-upcoming-events" class="calendar-upcoming-events"></ul>
+            <p id="calendar-upcoming-empty" class="muted">조회 후 가까운 일정을 표시합니다.</p>
+          </section>
+          <section class="calendar-selected-panel" aria-labelledby="calendar-selected">
           <h3 id="calendar-selected" aria-live="polite"></h3><ul id="calendar-events" class="calendar-events"></ul><p id="calendar-empty" class="muted"></p>
+          </section>
           </div>
           </div>
           <p id="calendar-notes" class="calendar-note muted"></p><p class="calendar-note muted">마지막 조회 <span id="calendar-queried-at">확인 전</span></p>
@@ -97,8 +115,8 @@
       </div>
       <div id="panel-alerts" class="tab-panel" role="tabpanel" data-tab-panel="alerts" aria-labelledby="tab-alerts" tabindex="0" hidden>
         <div class="section-title panel-heading"><h2>알림 설정</h2></div>
-        <section id="usage-alerts" class="notifications" aria-labelledby="usage-alerts-title" aria-busy="false"><div class="section-title"><h3 id="usage-alerts-title">사용량 알림</h3><button id="usage-alerts-toggle" class="button-secondary" type="button" aria-pressed="false" disabled>사용량 알림 켜기</button></div><p id="usage-alerts-status" class="muted">리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.</p><p class="muted">앱과 탭이 열려 있을 때만 동작합니다. 잔여량은 새 조회가 있을 때 확인합니다.</p></section>
-        <section class="notifications" aria-labelledby="notifications-title"><div class="section-title"><h3 id="notifications-title">만료 알림</h3><button id="notifications-toggle" class="button-secondary" type="button" aria-pressed="false" disabled>알림 켜기</button></div><p id="notifications-status" class="muted">브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.</p></section>
+        <section id="usage-alerts" class="notifications" aria-labelledby="usage-alerts-title" aria-busy="false"><div class="notification-content"><div class="notification-copy"><h3 id="usage-alerts-title">사용량 알림</h3><p id="usage-alerts-status" class="muted">리셋 30분 전·잔여량 20% 이하·리셋 확인 시 알려드립니다.</p><p class="muted">앱과 탭이 열려 있을 때만 동작합니다. 잔여량은 새 조회가 있을 때 확인합니다.</p></div><button id="usage-alerts-toggle" class="button-secondary" type="button" aria-pressed="false" disabled>사용량 알림 켜기</button></div></section>
+        <section class="notifications" aria-labelledby="notifications-title"><div class="notification-content"><div class="notification-copy"><h3 id="notifications-title">만료 알림</h3><p id="notifications-status" class="muted">브라우저 탭이 열려 있을 때만 24시간 전·1시간 전에 알려드립니다.</p></div><button id="notifications-toggle" class="button-secondary" type="button" aria-pressed="false" disabled>알림 켜기</button></div></section>
       </div>
 
     </div>

@@ -36,7 +36,7 @@ test('recommendation display keeps exact deadline and detail reason without chan
   const snapshot = { detailState: 'partial', credits: [{ status: 'available', expiryState: 'unknown' }] };
   const before = structuredClone([result, snapshot]);
   assert.deepEqual(buildRecommendationDisplay(result, snapshot), {
-    title: '지금 사용을 추천합니다!', summaryReason: '만료 전에 최신 상태를 확인하고 사용을 검토하세요.', detailReason: '권장 마감에 관한 전체 근거',
+    title: '지금 사용을 추천합니다.', summaryReason: '만료 전에 최신 상태를 확인하고 사용을 검토하세요.', detailReason: '권장 마감에 관한 전체 근거',
     deadlineAt: N - 1800, tone: 'deadline', scopeNote: '조회된 항목 기준 · 일부 만료 시각 확인 불가',
   });
   assert.deepEqual([result, snapshot], before);
@@ -47,8 +47,8 @@ test('recommendation tone and summary retain distinct operational states', () =>
     ['prepare', 'neutral', '현재 한도를 사용한 뒤 리셋권 사용을 준비하세요.'],
     ['deadline', 'deadline', '현재 한도를 가능한 만큼 사용한 뒤 권장 마감에 확인하세요.'],
     ['refreshing', 'pending', '조회가 완료되면 추천을 다시 안내합니다.'],
-    ['refresh-needed', 'error', '최신 상태를 재조회해 주세요.'],
-    ['server-restricted', 'error', '서버가 일반 사용을 제한했습니다. 최신 상태를 확인하세요.'],
+    ['refresh-needed', 'error', '이전 조회 결과로 사용 시점을 판단할 수 없습니다.'],
+    ['server-restricted', 'error', '새로고침 후 실제 사용 허용 여부를 확인하세요.'],
     ['no-credits', 'neutral', '원래 근거'], ['unknown-expiry', 'neutral', '원래 근거'],
   ];
   for (const [code, tone, summaryReason] of rows) {

@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { createApplication } from '../lib/http.mjs';
 import { AppError } from '../lib/errors.mjs';
 const N = 1791072000, H = 3600, D = 86400;
+const outputDir = process.env.VISUAL_QA_OUTPUT_DIR || await mkdtemp(join(tmpdir(), 'limit-check-reset-calendar-qa-'));
+const screenshotDir = join(outputDir, 'reset-calendar');
+await mkdir(screenshotDir, { recursive: true });
 const snapshot = () => ({ queriedAt: N, availableCount: 2, detailState: 'complete', accountScope: 'calendar-account', revision: 0, ordinaryUsageAllowed: true,
   credits: [{ number: 1, title: '첫 리셋권', status: 'available', expiryState: 'known', expiresAt: N + 12 * H }, { number: 2, title: '다음 리셋권', status: 'available', expiryState: 'known', expiresAt: N + 3 * D }],
   usageWindows: [{ kind: 'five-hour', state: 'complete', remainingPercent: 65, resetsAt: N + 5 * H }, { kind: 'weekly', state: 'complete', remainingPercent: 80, resetsAt: N + 12 * H }] });
@@ -57,6 +62,22 @@ test('tabs and calendar support selection, history, month navigation and distinc
   await page.waitForFunction(() => document.querySelector('#tab-calendar').getAttribute('aria-selected') === 'true');
   assert.equal(await page.locator('[data-calendar-date="2026-10-07"]').getAttribute('aria-pressed'), 'true');
 });
+test('upcoming event opens its calendar date without starting a new usage read', async t => {
+  const read = () => ({ ...snapshot(), usageWindows: snapshot().usageWindows.map(row => row.kind === 'weekly'
+    ? { ...row, resetsAt: N + 5 * D } : row) });
+  const { page, reads } = await open(t, { read });
+  await page.locator('#tab-calendar').click();
+  const upcoming = page.locator('#calendar-upcoming-events [data-calendar-upcoming-date]');
+  assert.equal(await upcoming.count(), 3);
+  assert.match(await upcoming.nth(0).innerText(), /5시간 한도 리셋/);
+  assert.match(await upcoming.nth(1).innerText(), /리셋권 1 만료.*첫 리셋권/s);
+  assert.match(await upcoming.nth(2).innerText(), /리셋권 2 만료.*다음 리셋권/s);
+  const queryCount = reads();
+  await upcoming.nth(2).click();
+  assert.equal(await page.locator('#calendar-selected').innerText(), '2026-10-07 일정 · 1건');
+  assert.match(await page.locator('#calendar-events').innerText(), /다음 리셋권/);
+  assert.equal(await reads(), queryCount);
+});
 test('obsolete forecast URL falls back without losing unrelated query values', async t => {
   const { page } = await open(t, { path: '/?tab=forecast&source=desktop' });
   assert.equal(new URL(page.url()).searchParams.get('tab'), 'credits');
@@ -70,6 +91,7 @@ test('failed refresh retains calendar events and suspends recommendation, then r
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
   await page.locator('#tab-calendar').click();
   assert.equal(await page.locator('#calendar-events [data-kind]').count(), 3);
+  assert.equal(await page.locator('#calendar-upcoming-events [data-calendar-upcoming-date]').count(), 3);
   assert.match(await page.locator('#calendar-status').innerText(), /이전 조회/);
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.body.dataset.loading === 'false');
@@ -78,6 +100,7 @@ test('failed refresh retains calendar events and suspends recommendation, then r
   await page.clock.runFor(5000);
   await page.waitForFunction(() => document.querySelector('#count').textContent === '확인 전');
   assert.equal(await page.locator('#calendar-events [data-kind]').count(), 0);
+  assert.equal(await page.locator('#calendar-upcoming-events [data-calendar-upcoming-date]').count(), 0);
   assert.match(await page.locator('#calendar-month').innerText(), /2026년 10월/);
 });
 test('elapsed deadline suspends until a successful refresh offers immediate use', async t => {
@@ -86,7 +109,7 @@ test('elapsed deadline suspends until a successful refresh offers immediate use'
   assert.equal(await page.locator('#recommendation').getAttribute('data-code'), 'refresh-needed');
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.body.dataset.loading === 'false');
-  assert.equal(await page.locator('#recommendation-title').innerText(), '지금 사용을 추천합니다!');
+  assert.equal(await page.locator('#recommendation-title').innerText(), '지금 사용을 추천합니다.');
 });
 for (const theme of ['light', 'dark']) for (const width of [320, 375, 768, 1280]) {
   test(`calendar ${theme} ${width}px fits and exposes labelled dates and legend`, async t => {
@@ -97,8 +120,7 @@ for (const theme of ['light', 'dark']) for (const width of [320, 375, 768, 1280]
     assert.match(await page.locator('[data-calendar-date="2026-10-04"]').getAttribute('aria-label'), /일정 3건/);
     await page.locator('[data-calendar-date="2026-10-04"]').focus();
     assert.ok(await page.locator('[data-calendar-date="2026-10-04"]').evaluate(n => parseFloat(getComputedStyle(n).outlineWidth) >= 2));
-    await mkdir('.tmp/check/reset-calendar', { recursive: true });
-    await page.screenshot({ path: `.tmp/check/reset-calendar/${theme}-${width}.png`, fullPage: true });
+    await page.screenshot({ path: join(screenshotDir, `${theme}-${width}.png`), fullPage: true });
   });
 }
 test('calendar clock ticks do not repeat live heading announcements or disturb date focus', async t => {
