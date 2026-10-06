@@ -78,7 +78,11 @@ h1 { max-width: 720px; margin: 0; font-size: var(--text-3xl); font-weight: 700; 
 .connection::before { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--text-muted); content: ""; }
 .connection[data-state="ready"]::before { background: var(--success); }
 .query-meta { min-width: 0; color: var(--text-muted); font-size: var(--text-meta-size); line-height: 1.5; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.button-primary, .button-secondary, .tab {
+.button-primary, .button-secondary, .button-ghost, .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   min-height: var(--control-height);
   min-width: var(--control-height);
   border-radius: var(--radius-control);
@@ -89,13 +93,15 @@ h1 { max-width: 720px; margin: 0; font-size: var(--text-3xl); font-weight: 700; 
   cursor: pointer;
   transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease, border-color var(--motion-fast) ease;
 }
-.button-primary { padding: 0 18px; border: 1px solid var(--accent); background: var(--accent); color: var(--button-on-accent); }
+.button-primary { padding: 0 var(--space-4); border: 1px solid var(--primary); background: var(--primary); color: var(--primary-foreground); }
 .button-primary:hover { border-color: var(--accent-hover); background: var(--accent-hover); }
-.button-secondary { padding: 0 15px; border: 1px solid var(--border-strong); background: transparent; color: var(--text-primary); }
+.button-secondary { padding: 0 var(--space-4); border: 1px solid var(--input); background: transparent; color: var(--text-primary); }
+.button-ghost { padding: 0 var(--space-3); border: 1px solid transparent; background: transparent; color: var(--text-primary); }
+.button-ghost:hover { background: var(--accent-soft); color: var(--accent); }
 .button-secondary:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-.tab:active, .button-secondary:active { background-color: var(--accent-soft); }
+.tab:active, .button-ghost:active, .button-secondary:active { background-color: var(--accent-soft); }
 .button-primary:active { background-color: var(--accent-hover); }
-button:disabled { border-color: var(--border); background: var(--bg-muted); color: var(--text-muted); cursor: not-allowed; }
+button:disabled { border-color: var(--border); background: var(--muted); color: var(--muted-foreground); cursor: not-allowed; }
 body[data-loading="true"] #refresh { cursor: progress; }
 button:focus-visible, a:focus-visible, [role="tabpanel"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 summary { cursor: pointer; overflow-wrap: anywhere; min-height: var(--control-height); padding-block: var(--space-2); font-size: var(--text-label-size); line-height: 1.5; }
@@ -294,7 +300,7 @@ footer { margin-top: var(--space-8); padding: var(--space-6) 0 0; border-top: 1p
 .calendar-toolbar button { padding-inline: var(--space-3); }
 .calendar-weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-2); }
 .calendar-weekdays { text-align: center; color: var(--text-muted); margin-bottom: var(--space-2); font-size: var(--text-meta-size); line-height: 1.5; }
-.calendar-date { min-width: 24px; min-height: 56px; padding: var(--space-2) 0; font-size: var(--text-label-size); line-height: 1.5; background: var(--bg-page); border: 1px solid var(--border); color: var(--text-primary); display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+.calendar-date { border-radius: var(--radius-control); min-width: 24px; min-height: 56px; padding: var(--space-2) 0; font-size: var(--text-label-size); line-height: 1.5; background: var(--bg-page); border: 1px solid var(--border); color: var(--text-primary); display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
 .calendar-date, .calendar-upcoming-button { scroll-margin-top: var(--scroll-offset); }
 .calendar-date:hover { border-color: var(--border-strong); }
 .calendar-date[aria-pressed="true"] { outline: 2px solid var(--focus); outline-offset: -2px; background: var(--accent-soft); }
