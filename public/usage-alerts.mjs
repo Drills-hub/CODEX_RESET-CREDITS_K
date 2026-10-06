@@ -1,3 +1,5 @@
+import { sha256Hex } from './notifications.mjs';
+
 const preferenceKey = 'reset-check.usage-alerts.enabled.v1';
 const ledgerKey = 'reset-check.usage-alerts.sent.v1';
 const scopeKey = 'reset-check.usage-alerts.account-scope.v1';
@@ -43,10 +45,8 @@ export function createUsageAlertController({ storage, locks, Notification = glob
       && ['soon', 'low', 'reset'].includes(row.milestone) && Number.isFinite(row.sentAt)); }
     catch { return []; }
   }
-  async function fingerprint(event) {
-    const source = JSON.stringify([snapshot.accountScope, event.kind, event.resetsAt]);
-    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source));
-    return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  function fingerprint(event) {
+    return sha256Hex(crypto, JSON.stringify([snapshot.accountScope, event.kind, event.resetsAt]));
   }
   function update(value) {
     const changed = snapshot && (!value || snapshot.revision !== value.revision || snapshot.accountScope !== value.accountScope);

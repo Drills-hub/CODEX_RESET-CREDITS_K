@@ -23,7 +23,7 @@ function harness({ now = 76 * hour, storage = new Map(), storageApi, lockState =
       return next;
     } },
     Notification: Object.assign(NotificationClass ?? function (title, options) { notices.push({ title, options }); }, { get permission() { return permission; } }),
-    crypto: { subtle: {}, digest },
+    crypto: { subtle: { digest: async (_, bytes) => new TextEncoder().encode(await digest(new TextDecoder().decode(bytes))) } },
   };
   const errors = [];
   const controller = createReminderController({ ...env, refresh, onError: error => errors.push(error) });
@@ -52,7 +52,7 @@ test('a due reminder refreshes once, revalidates, and persists only hashed miles
   assert.deepEqual(h.errors, []);
   assert.equal(h.notices.length, 1);
   const persisted = [...h.storage.values()].join('');
-  assert.match(persisted, /hash:/);
+  assert.match(persisted, /"fingerprint":"[0-9a-f]+"/);
   assert.match(persisted, /24h/);
   assert.doesNotMatch(persisted, /PRIVATE_TITLE|PRIVATE/);
   assert.doesNotMatch(h.notices[0].title + JSON.stringify(h.notices[0].options), /PRIVATE/);

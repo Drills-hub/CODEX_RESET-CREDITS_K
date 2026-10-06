@@ -5,7 +5,12 @@ const lockName = 'reset-check.reminders.delivery.v1';
 const maxTimerDelay = 2_147_483_647;
 const milestones = [['24h', 24 * 60 * 60 * 1000], ['1h', 60 * 60 * 1000]];
 
-export function createReminderController({ storage, locks, Notification, crypto = globalThis.crypto, now = Date.now, setTimeout: schedule = globalThis.setTimeout, clearTimeout: cancel = globalThis.clearTimeout, refresh, notify, onError = () => {} } = {}) {
+export async function sha256Hex(crypto, text) {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function createReminderController({ storage, locks, Notification, crypto = globalThis.crypto, now = Date.now, setTimeout: schedule = globalThis.setTimeout, clearTimeout: cancel = globalThis.clearTimeout, refresh, onError = () => {} } = {}) {
   let enabled = false;
   let snapshot;
   let revision;
@@ -14,7 +19,7 @@ export function createReminderController({ storage, locks, Notification, crypto 
   let lifecycle = 0;
   let snapshotVersion = 0;
 
-  const available = Boolean(storage && locks?.request && crypto?.subtle && (Notification || notify));
+  const available = Boolean(storage && locks?.request && crypto?.subtle && Notification);
   function report(error) { try { onError(error); } catch {} }
   function cancelTimer() {
     if (timer !== undefined) cancel(timer);
@@ -66,11 +71,8 @@ export function createReminderController({ storage, locks, Notification, crypto 
     try { storage.setItem(ledgerKey, JSON.stringify(ledger)); return true; }
     catch (error) { report(error); return false; }
   }
-  async function fingerprint(credit) {
-    const source = JSON.stringify([credit.reminderKey, credit.grantedAt, credit.expiresAt]);
-    if (crypto.digest) return crypto.digest(source);
-    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source));
-    return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  function fingerprint(credit) {
+    return sha256Hex(crypto, JSON.stringify([credit.reminderKey, credit.grantedAt, credit.expiresAt]));
   }
   function eligible(credit, at) {
     return typeof credit?.reminderKey === 'string' && credit.reminderKey.length > 0 && credit.status === 'available' && credit.expiryState === 'known' && Number.isSafeInteger(credit.expiresAt) && credit.expiresAt * 1000 > at;
@@ -92,7 +94,6 @@ export function createReminderController({ storage, locks, Notification, crypto 
   function makeNotification({ credit, milestone, fingerprint }) {
     const ordinal = Number.isSafeInteger(credit.number) && credit.number > 0 ? credit.number : 1;
     const message = milestone === '24h' ? '만료까지 24시간 남았습니다.' : '만료까지 1시간 남았습니다.';
-    if (notify) return notify({ title: `리셋권 ${ordinal}번`, body: message });
     return new Notification(`리셋권 ${ordinal}번`, { body: message, tag: `reset-credit-${fingerprint}-${milestone}` });
   }
   async function plan() {
@@ -224,10 +225,6 @@ export function createReminderController({ storage, locks, Notification, crypto 
       if (nextScope && previousScope !== nextScope && !persistScope(nextScope)) enabled = false;
       if (enabled) void plan();
       else if (!value) cancelTimer();
-    },
-    cancel() {
-      invalidate();
-      snapshot = undefined;
     },
     pause() {
       cancelTimer();

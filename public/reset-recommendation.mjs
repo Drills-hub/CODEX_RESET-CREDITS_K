@@ -1,10 +1,10 @@
 import { formatKst } from './time.mjs';
+import { validTime } from './expiry-calendar.mjs';
 const HOUR = 3600, DAY = 86400;
-const validTime = value => Number.isSafeInteger(value) && value >= 0 && value <= 8640000000000;
 
 // All input/output times are Unix seconds. No consumption or future balance estimates.
 export function recommendReset(snapshot, { now = Date.now() / 1000, stale = false, refreshing = false } = {}) {
-  const base = { code: 'not-ready', credit: null, targetAt: null, deadlineAt: null, queriedAt: snapshot?.queriedAt ?? null, title: '조회 후 리셋 추천을 안내합니다.', reason: '리셋권 정보를 조회해 주세요.' };
+  const base = { code: 'not-ready', credit: null, deadlineAt: null, queriedAt: snapshot?.queriedAt ?? null, title: '조회 후 리셋 추천을 안내합니다.', reason: '리셋권 정보를 조회해 주세요.' };
   const result = (code, title, reason, extra = {}) => ({ ...base, code, title, reason, ...extra });
   const requery = () => result('refresh-needed', '최신 상태를 재조회해 주세요.', '이전 조회의 추천·만료 또는 한도 리셋 시각이 지났거나 최신 정보를 확인하지 못했습니다. 새로고침해 주세요.');
   if (refreshing) return result('refreshing', '리셋권 재조회 중입니다.', '조회가 완료되면 추천을 다시 안내합니다.');
@@ -37,5 +37,5 @@ export function recommendReset(snapshot, { now = Date.now() / 1000, stale = fals
   const hour = formatKst(roundedAt).slice(11, 13);
   return result(immediate ? 'use-now' : 'deadline', immediate ? '지금 사용을 추천합니다!' : `${hour}시 사용을 추천합니다!`,
     `${context}현재 주간·5시간 잔여 한도를 가능한 만큼 사용한 뒤, 만료 전 권장 마감에 리셋권을 사용하세요. 권장 마감: ${formatKst(deadlineAt)}. 실제 사용 전에 최신 상태를 확인하세요.`,
-    { credit, deadlineAt, targetAt: immediate ? Math.floor(now) : deadlineAt });
+    { credit, deadlineAt });
 }

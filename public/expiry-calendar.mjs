@@ -1,6 +1,6 @@
-const timeValid = value => Number.isSafeInteger(value) && value >= 0 && value <= 8640000000000;
+export const validTime = value => Number.isSafeInteger(value) && value >= 0 && value <= 8640000000000;
 export function kstDateKey(seconds) {
-  if (!timeValid(seconds)) return null;
+  if (!validTime(seconds)) return null;
   const date = new Date(seconds * 1000 + 9 * 3600000);
   if (!Number.isFinite(date.getTime()) || date.getUTCFullYear() < 1 || date.getUTCFullYear() > 9999) return null;
   return date.toISOString().slice(0, 10);
@@ -15,7 +15,7 @@ export function monthDates(month) {
   return Array.from({ length: count }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`);
 }
 export function calendarEvents(snapshot) {
-  if (!snapshot) return { state: 'not-ready', events: [], notes: ['조회 후 만료·리셋 일정을 표시합니다.'] };
+  if (!snapshot) return { events: [], notes: ['조회 후 만료·리셋 일정을 표시합니다.'] };
   const events = [], notes = [];
   const add = (kind, title, at, number = null) => {
     const date = kstDateKey(at);
@@ -35,7 +35,7 @@ export function calendarEvents(snapshot) {
   }
   const order = { 'credit-expiry': 0, 'five-hour-reset': 1, 'weekly-reset': 2 };
   events.sort((a, b) => a.at - b.at || order[a.kind] - order[b.kind] || a.number - b.number);
-  return { state: 'ready', events, notes };
+  return { events, notes };
 }
 
 export function upcomingEvents(snapshot, nowSeconds = Date.now() / 1000, events = calendarEvents(snapshot).events) {

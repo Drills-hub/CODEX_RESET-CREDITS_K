@@ -32,7 +32,7 @@ test('remaining summaries round minutes while distinguishing subminute and elaps
   }
 });
 test('recommendation display keeps exact deadline and detail reason without changing the input', () => {
-  const result = { code: 'use-now', title: '지금 사용을 추천합니다!', reason: '권장 마감에 관한 전체 근거', targetAt: N, deadlineAt: N - 1800 };
+  const result = { code: 'use-now', title: '지금 사용을 추천합니다!', reason: '권장 마감에 관한 전체 근거', deadlineAt: N - 1800 };
   const snapshot = { detailState: 'partial', credits: [{ status: 'available', expiryState: 'unknown' }] };
   const before = structuredClone([result, snapshot]);
   assert.deepEqual(buildRecommendationDisplay(result, snapshot), {

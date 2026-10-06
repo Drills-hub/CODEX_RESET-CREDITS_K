@@ -11,7 +11,7 @@ test('expiry thresholds include exactly seven days and twenty-four hours', () =>
     assert.equal(rec(snapshot(N + seconds)).code, code);
   }
   assert.equal(rec(snapshot(N + 7 * D)).title, '자유롭게 사용');
-  assert.equal(rec(snapshot()).targetAt, N + 23 * H);
+  assert.equal(rec(snapshot()).deadlineAt, N + 23 * H);
   assert.equal(rec(snapshot()).title, '08시 사용을 추천합니다!');
 });
 test('selects earliest eligible credit and reports partial coverage', () => {

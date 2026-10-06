@@ -39,33 +39,39 @@ export function createCalendarView(root) {
     button.append(name, time, remaining); element.append(button);
     return { element, button, time, remaining };
   }
-  function renderUpcoming(events, now) {
-    const upcoming = upcomingEvents(latest, now / 1000, events);
-    const desired = [], occurrences = new Map();
-    for (const event of upcoming) {
+  // Keyed in-place list update: reuses rows so focus and open <details> survive clock ticks.
+  function reconcile(container, rows, events, create, update) {
+    const desired = [], keep = new Set(), occurrences = new Map();
+    for (const event of events) {
       const signature = JSON.stringify([event.kind, event.number, event.at, event.title]);
       const ordinal = occurrences.get(signature) ?? 0; occurrences.set(signature, ordinal + 1);
       const key = `${signature}:${ordinal}`;
-      let row = upcomingRows.get(key);
-      if (!row) { row = createUpcomingRow(event); upcomingRows.set(key, row); }
-      setText(row.time, formatSummaryTime(event.at, { nowMs: now }));
-      setText(row.remaining, formatSummaryRemaining(event.at, { nowMs: now }));
-      desired.push({ key, row });
+      let row = rows.get(key);
+      if (!row) { row = create(event); rows.set(key, row); }
+      update(row, event);
+      keep.add(key); desired.push(row);
     }
     const active = document.activeElement;
     let recoverFocus = false;
-    const keep = new Set(desired.map(item => item.key));
-    for (const [key, row] of upcomingRows) {
+    for (const [key, row] of rows) {
       if (keep.has(key)) continue;
       recoverFocus ||= row.element.contains(active);
-      row.element.remove(); upcomingRows.delete(key);
+      row.element.remove(); rows.delete(key);
     }
-    let cursor = upcomingList.firstChild;
-    for (const { row } of desired) {
+    let cursor = container.firstChild;
+    for (const row of desired) {
       if (row.element === cursor) cursor = cursor.nextSibling;
-      else upcomingList.insertBefore(row.element, cursor);
+      else container.insertBefore(row.element, cursor);
     }
     if (recoverFocus) grid.querySelector(`[data-calendar-date="${selected}"]`)?.focus();
+    else if (container.contains(active) && document.activeElement !== active) active.focus();
+  }
+  function renderUpcoming(events, now) {
+    const upcoming = upcomingEvents(latest, now / 1000, events);
+    reconcile(upcomingList, upcomingRows, upcoming, createUpcomingRow, (row, event) => {
+      setText(row.time, formatSummaryTime(event.at, { nowMs: now }));
+      setText(row.remaining, formatSummaryRemaining(event.at, { nowMs: now }));
+    });
     get('upcoming-empty').hidden = upcoming.length > 0;
     setText(get('upcoming-empty'), !latest ? '조회 후 가까운 일정을 표시합니다.'
       : '확인된 미래 일정이 없습니다. 최신 상태는 새로고침으로 확인하세요.');
@@ -106,33 +112,11 @@ export function createCalendarView(root) {
       if (focusedDate) grid.querySelector(`[data-calendar-date="${focusedDate}"]`)?.focus();
     }
     renderUpcoming(data.events, now);
-    const desired = [], occurrences = new Map();
-    for (const event of events) {
-      const signature = JSON.stringify([event.kind, event.number, event.at, event.title]);
-      const ordinal = occurrences.get(signature) ?? 0; occurrences.set(signature, ordinal + 1);
-      const rowKey = `${signature}:${ordinal}`;
-      let row = eventRows.get(rowKey);
-      if (!row) { row = createEventRow(event); eventRows.set(rowKey, row); }
+    reconcile(list, eventRows, events, createEventRow, (row, event) => {
       setText(row.time, formatSummaryTime(event.at, { nowMs: now }));
       setText(row.remaining, formatSummaryRemaining(event.at, { nowMs: now }));
       setText(row.fullRemaining, remainingTime(event.at, now));
-      desired.push({ key: rowKey, row });
-    }
-    const active = document.activeElement;
-    let recoverFocus = false;
-    const keep = new Set(desired.map(item => item.key));
-    for (const [rowKey, row] of eventRows) {
-      if (keep.has(rowKey)) continue;
-      recoverFocus ||= row.element.contains(active);
-      row.element.remove(); eventRows.delete(rowKey);
-    }
-    let cursor = list.firstChild;
-    for (const { row } of desired) {
-      if (row.element === cursor) cursor = cursor.nextSibling;
-      else list.insertBefore(row.element, cursor);
-    }
-    if (recoverFocus) grid.querySelector(`[data-calendar-date="${selected}"]`)?.focus();
-    else if (list.contains(active) && document.activeElement !== active) active.focus();
+    });
     get('empty').hidden = events.length > 0;
     setText(get('empty'), !latest ? '조회 후 일정을 확인할 수 있습니다.'
       : data.notes.length ? '이 날짜에 확인된 일정이 없습니다. 아래 데이터 안내를 확인하세요.' : '예정된 만료·리셋이 없습니다.');

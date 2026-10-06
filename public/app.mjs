@@ -185,8 +185,8 @@ function tick() {
   setText(elements['query-state'], queryState);
   const queryStateRelevant = !snapshot || state.loading || state.usageStale || !state.connected || state.kind === 'error';
   elements['query-state'].classList.toggle('sr-only', !queryStateRelevant);
-  renderUsage(snapshot);
-  renderRecommendation(snapshot);
+  const resetPassed = renderUsage(snapshot);
+  renderRecommendation(snapshot, resetPassed);
   calendar.update(snapshot, { loading: state.loading, stale: state.usageStale || !state.connected });
   const nearest = snapshot?.credits.find(c => c.expiryState === 'known');
   setText(elements.nearest, nearest ? formatSummaryTime(nearest.expiresAt) : snapshot ? '확인 가능한 만료 시각이 없습니다.' : '아직 조회하지 않았습니다.');
@@ -201,8 +201,6 @@ function tick() {
   const completeUsage = snapshot?.usageWindows?.length === 2
     && snapshot.usageWindows.every(row => row.state === 'complete');
   const incompleteUsage = Boolean(snapshot && !completeUsage);
-  const resetPassed = snapshot?.usageWindows?.some(row => Number.isSafeInteger(row.resetsAt)
-    && row.resetsAt * 1000 <= Date.now()) ?? false;
   const usageStatusRelevant = Boolean(snapshot && (restricted
     || !state.loading && !state.usageStale && (resetPassed || incompleteUsage)));
   elements['usage-status'].hidden = !usageStatusRelevant;
@@ -243,8 +241,9 @@ function renderUsage(snapshot) {
     : resetPassed ? 'reset-passed'
     : snapshot.usageWindows?.every(row => row.state === 'complete') ? 'complete'
     : 'partial';
+  return resetPassed;
 }
-function renderRecommendation(snapshot) {
+function renderRecommendation(snapshot, resetPassed) {
   const recommendation = recommendReset(snapshot, { refreshing: state.loading, stale: state.usageStale || !state.connected || state.authState !== 'chatgpt' });
   const display = buildRecommendationDisplay(recommendation, snapshot);
   const passed = display.deadlineAt !== null && display.deadlineAt * 1000 < Date.now();
@@ -265,12 +264,12 @@ function renderRecommendation(snapshot) {
   elements['recommendation-urgency'].hidden = display.tone !== 'deadline';
   elements['recommendation-disclaimer'].textContent = ['free-use', 'prepare', 'deadline', 'use-now'].includes(recommendation.code)
     ? '만료 기한 기준 권고입니다. 실제 사용 전에 최신 상태를 확인하세요.' : '최신 상태를 확인한 뒤 사용 시점을 다시 안내합니다.';
-  const expired = snapshot?.usageWindows?.some(row => Number.isSafeInteger(row.resetsAt) && row.resetsAt * 1000 <= Date.now());
-  announceStatus('recommendation', `${snapshot?.accountScope}:${recommendation.code}`, recommendation.code === 'refresh-needed' && !expired && !state.usageStale
+  announceStatus('recommendation', `${snapshot?.accountScope}:${recommendation.code}`, recommendation.code === 'refresh-needed' && !resetPassed && !state.usageStale
     ? recommendation.title : '', false);
 }
 async function api(path, { method = 'GET', data } = {}) {
   const response = await fetch(path, {
+    // Timeouts nest: server read 15s < this fetch 17s < usage-read-coordinator 18s.
     method, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(17000),
     headers: { 'X-Reset-Check': '1', ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
     ...(method === 'POST' ? { body: JSON.stringify(data ?? {}) } : {}),
@@ -281,10 +280,6 @@ async function api(path, { method = 'GET', data } = {}) {
 }
 function failure(error) {
   return typeof error?.message === 'string' && typeof error?.code === 'string' ? error : { code: 'CONNECTION', message: '로컬 서버에 연결하지 못했습니다. 앱 실행 상태를 확인해 주세요.', clearPrevious: false };
-}
-async function refresh() {
-  if (!sessionReady) return null;
-  return refreshSnapshot();
 }
 async function refreshSnapshot() {
   if (!sessionReady || pageSuspended) return null;
@@ -333,8 +328,9 @@ async function start() {
     sessionReady = true;
     readCoordinator = createUsageReadCoordinator({ locks: globalThis.navigator?.locks, BroadcastChannel: globalThis.BroadcastChannel,
       read: () => api('/api/reset-credits/read', { method: 'POST' }) });
+    const storage = (() => { try { return globalThis.localStorage; } catch { return null; } })();
     reminders = createReminderController({
-      storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
+      storage,
       locks: globalThis.navigator?.locks,
       Notification: globalThis.Notification,
       crypto: globalThis.crypto,
@@ -342,11 +338,10 @@ async function start() {
       onError: () => { reminderError = '알림을 확인하지 못했습니다. 브라우저 저장소와 설정을 확인해 주세요.'; render(); },
     });
     usageAlerts = createUsageAlertController({
-      storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
-      locks: globalThis.navigator?.locks, Notification: globalThis.Notification, crypto: globalThis.crypto,
+      storage, locks: globalThis.navigator?.locks, Notification: globalThis.Notification, crypto: globalThis.crypto,
       refresh: refreshSnapshot, onError: () => { usageAlertError = '알림을 확인하지 못했습니다. 브라우저 저장소와 설정을 확인해 주세요.'; render(); },
     });
-    await refresh();
+    await refreshSnapshot();
     reminders.restore();
     usageAlerts.restore();
     render();
@@ -356,7 +351,7 @@ async function start() {
     dispatch({ type: 'failure', error: { code: 'SESSION', message: '앱에서 열린 브라우저로 접속해 주세요. 터미널에서 앱을 종료한 뒤 npm start로 다시 실행할 수 있습니다.', clearPrevious: true } });
   }
 }
-elements.refresh.addEventListener('click', refresh);
+elements.refresh.addEventListener('click', () => refreshSnapshot());
 elements['notifications-toggle'].addEventListener('click', async () => {
   reminderError = '';
   if (reminders?.enabled) reminders.disable();
@@ -385,7 +380,7 @@ addEventListener('pagehide', event => {
 addEventListener('pageshow', event => {
   if (!event.persisted) return;
   pageSuspended = false;
-  const reload = () => { if (!pageSuspended) void refresh(); };
+  const reload = () => { if (!pageSuspended) void refreshSnapshot(); };
   if (activeRefresh) void activeRefresh.then(reload, reload);
   else reload();
 });

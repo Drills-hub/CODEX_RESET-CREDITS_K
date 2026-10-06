@@ -46,7 +46,7 @@ test('upcoming events return at most three future calendar events in the existin
   assert.deepEqual(upcomingEvents(snapshot, NaN), []);
 });
 test('unknown, unavailable and count-only details are not converted into dates', () => {
-  assert.equal(calendarEvents(null).state, 'not-ready');
+  assert.deepEqual(calendarEvents(null).events, []);
   for (const detailState of ['unavailable', 'count-only']) {
     const value = calendarEvents({ detailState, credits: [], usageWindows: [] });
     assert.equal(value.events.length, 0);

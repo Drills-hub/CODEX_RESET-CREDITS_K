@@ -82,13 +82,5 @@ export function createTabController({ tablist, tabs, panels, initialTab, onSelec
   resizeTarget.addEventListener?.('resize', onResize);
   activate(current, { notify: false, animate: false });
 
-  return {
-    activate,
-    current: () => current,
-    destroy() {
-      tablist.removeEventListener('click', onClick);
-      tablist.removeEventListener('keydown', onKeydown);
-      resizeTarget.removeEventListener?.('resize', onResize);
-    },
-  };
+  return { activate };
 }
