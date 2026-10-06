@@ -35,6 +35,7 @@ let pageGeneration = 0;
 let usageAlertError = '';
 let reminderError = '';
 let animateSnapshotChanges = false;
+let settledRecommendationTitle;
 const badgeTones = { available: 'success', redeeming: 'warning', redeemed: 'neutral' };
 const labels = { available: '사용 가능', redeeming: '사용 처리 중', redeemed: '사용 완료', unknown: '상태 확인 불가' };
 const tabs = createTabController({
@@ -250,7 +251,10 @@ function renderRecommendation(snapshot, resetPassed) {
   const deadlinePrefix = passed ? '권장 마감 경과: ' : '';
   elements.recommendation.dataset.code = recommendation.code;
   elements.recommendation.dataset.tone = display.tone;
-  setText(elements['recommendation-title'], display.title, { emphasize: true });
+  // The temporary "refreshing" title is not a change; emphasize only when the settled recommendation differs.
+  const settled = recommendation.code !== 'refreshing';
+  setText(elements['recommendation-title'], display.title, { emphasize: settled && display.title !== settledRecommendationTitle });
+  if (settled) settledRecommendationTitle = display.title;
   setText(elements['recommendation-reason'], display.summaryReason);
   setText(elements['recommendation-target'], display.deadlineAt === null ? '해당 없음' : deadlinePrefix + formatSummaryTime(display.deadlineAt));
   setText(elements['recommendation-remaining'], display.deadlineAt === null ? '' : formatSummaryRemaining(display.deadlineAt));

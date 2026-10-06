@@ -132,7 +132,7 @@ summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .usage-window { min-width: 0; }
 .usage-window h3 { margin: 0 0 var(--space-2); font-size: var(--text-label-size); font-weight: 600; line-height: 1.5; }
 .usage-balance { display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-3); }
-.usage-percent { font-size: var(--text-5xl); font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-percent { display: inline-block; font-size: var(--text-5xl); font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; transform-origin: left center; }
 .usage-balance span, .usage-label, .usage-reset, .usage-remaining { font-size: var(--text-label-size); line-height: 1.5; }
 .usage-window progress { display: block; width: 100%; height: 6px; margin: 0 0 var(--space-4); border: 0; border-radius: var(--radius-sm); overflow: hidden; background: var(--bg-muted); color: var(--accent); accent-color: var(--accent); }
 .usage-window progress[hidden] { display: none; }
@@ -145,7 +145,7 @@ summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 .recommendation { min-width: 0; margin: 0; padding: 0 0 0 var(--space-6); border: 0; border-left: 1px solid var(--border); background: transparent; overflow-wrap: anywhere; }
 .recommendation h3 { margin: 0 0 var(--space-3); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
-.recommendation-title { margin-bottom: var(--space-2); color: var(--text-primary); font-size: var(--text-heading-size); font-weight: 700; line-height: 1.4; }
+.recommendation-title { margin-bottom: var(--space-2); color: var(--text-primary); font-size: var(--text-heading-size); font-weight: 700; line-height: 1.4; transform-origin: left center; }
 #recommendation-reason, #reset-recommendation-reason { font-size: var(--text-body-size); line-height: 1.6; max-width: 60ch; }
 .recommendation-timing { margin-top: var(--space-4); }
 .recommendation-timing .usage-label { margin: 0 0 var(--space-1); }
@@ -160,7 +160,7 @@ summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 .summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: var(--space-4); margin-top: var(--space-6); padding-top: var(--space-4); border-top: 1px solid var(--border); }
 .label { margin-bottom: var(--space-1); color: var(--text-muted); font-size: var(--text-label-size); line-height: 1.5; }
-.balance strong { font-size: var(--text-3xl); font-weight: 700; line-height: 1.1; }
+.balance strong { display: inline-block; font-size: var(--text-3xl); font-weight: 700; line-height: 1.1; transform-origin: left center; }
 .unit { margin-left: var(--space-2); color: var(--text-muted); font-size: var(--text-label-size); }
 .next-expiry { min-width: 0; align-self: center; }
 #nearest { font-size: var(--text-base); font-weight: 600; line-height: 1.5; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

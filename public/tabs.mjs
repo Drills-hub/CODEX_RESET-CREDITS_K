@@ -19,11 +19,11 @@ export function createTabController({ tablist, tabs, panels, initialTab, onSelec
   const indicator = tablist.querySelector('[data-tab-indicator]');
   let current = normalizeTab(initialTab);
 
-  function positionIndicator(tab) {
+  function positionIndicator(tab, animate = false) {
     if (!indicator || !tab?.getBoundingClientRect) return;
     const listRect = tablist.getBoundingClientRect();
     const tabRect = tab.getBoundingClientRect();
-    motion?.moveIndicator(indicator, { x: tabRect.left - listRect.left + tablist.scrollLeft, width: tabRect.width });
+    motion?.moveIndicator(indicator, { x: tabRect.left - listRect.left + tablist.scrollLeft, width: tabRect.width }, { animate });
   }
 
   function revealTab(tab) {
@@ -50,7 +50,7 @@ export function createTabController({ tablist, tabs, panels, initialTab, onSelec
     const panel = panelById.get(current);
     if (focus) tab?.focus();
     revealTab(tab);
-    positionIndicator(tab);
+    positionIndicator(tab, changed && animate);
     if (changed && animate) motion?.enterPanel(panel);
     if (notify && changed) onSelect(current);
     return current;

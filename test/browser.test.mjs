@@ -134,13 +134,13 @@ for (const width of widths) {
     assert.match(await page.locator('#coverage').innerText(), /1개|부분|조회/);
     assert.equal(await page.locator('.credit').count(), 1);
     if (width === 375 || width === 1280) {
-      await page.waitForTimeout(240);
+      await page.waitForTimeout(450);
       await page.screenshot({ path: join(outputDir, `credits-${width}.png`), fullPage: true });
       await selectTab(page, 'calendar');
-      await page.waitForTimeout(240);
+      await page.waitForTimeout(450);
       await page.screenshot({ path: join(outputDir, `calendar-${width}.png`), fullPage: true });
       await selectTab(page, 'alerts');
-      await page.waitForTimeout(240);
+      await page.waitForTimeout(450);
       await page.screenshot({ path: join(outputDir, `alerts-${width}.png`), fullPage: true });
     }
   });
@@ -209,6 +209,8 @@ for (const colorScheme of ['light', 'dark']) test(`${colorScheme} theme meets da
   await page.setViewportSize({ width: 375, height: 950 });
   await page.keyboard.press('Tab');
   await page.keyboard.press('Tab'); // Query time disclosure precedes refresh in DOM order.
+  // Measure settled colors: refresh fades from its disabled to enabled colors over --motion-fast.
+  await page.locator('#refresh').evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
   const ratios = await page.evaluate(() => {
     const rgb = value => value.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel => channel / 255);
     const luminance = value => rgb(value).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4)
@@ -270,7 +272,7 @@ test('disabled refresh remains readable while a usage read is pending', async t 
   release(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
 });
 
-test('tab and refreshed-value changes update immediately without automatic animations', async t => {
+test('tab switches and refreshed values play short motion without blocking content', async t => {
   if (skipWithoutBrowser(t)) return;
   const context = await browser.newContext({ reducedMotion: 'no-preference' });
   t.after(() => context.close());
@@ -289,11 +291,14 @@ test('tab and refreshed-value changes update immediately without automatic anima
   } });
   await page.evaluate(() => { globalThis.__dashboardAnimationDurations = []; });
   await selectTab(page, 'calendar');
-  assert.equal(await page.evaluate(() => globalThis.__dashboardAnimationDurations.length), 0);
+  // Panel enter (380ms) + indicator slide (400ms).
+  assert.deepEqual((await page.evaluate(() => globalThis.__dashboardAnimationDurations)).sort(), [380, 400]);
   assert.ok(await page.locator('[data-tab-indicator]').evaluate(element => element.style.width !== '0px'));
+  await page.evaluate(() => { globalThis.__dashboardAnimationDurations = []; });
   await page.locator('#refresh').click(); await page.waitForFunction(() => document.body.dataset.loading === 'false');
+  // The value is final immediately; only the changed value is emphasized (440ms), not the unchanged recommendation.
   assert.equal(await page.locator('#usage-five-hour .usage-percent').innerText(), '64%');
-  assert.equal(await page.evaluate(() => globalThis.__dashboardAnimationDurations.length), 0);
+  assert.equal((await page.evaluate(() => globalThis.__dashboardAnimationDurations)).filter(duration => duration === 440).length, 1);
 });
 
 test('usage dashboard renders percentages and reset times and preserves them on refresh failure', async t => {
